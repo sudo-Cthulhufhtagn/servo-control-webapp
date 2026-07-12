@@ -35,6 +35,7 @@
           <div class="connection-row">
             <button id="connectButton" class="primary">Connect Bluetooth</button>
             <button id="disconnectButton" class="secondary" disabled>Disconnect</button>
+            <button id="joystickButton" class="secondary" disabled>Joystick</button>
           </div>
 
           <div class="status-strip">
@@ -102,6 +103,30 @@
           <ol id="logList" class="log-list"></ol>
         </section>
       </main>
+
+      <div id="joystickOverlay" class="joystick-overlay" aria-hidden="true">
+        <div class="joystick-modal card">
+          <div class="card-header">
+            <h2>Joystick</h2>
+            <button id="joystickCloseButton" class="secondary small" aria-label="Close joystick">Close</button>
+          </div>
+          <p class="hint">
+            Drag the ball away from center to steer — the further out, the faster the servos move. Horizontal
+            drives the horizontal servo, vertical drives the vertical servo.
+          </p>
+          <div class="trackpad" id="trackpadPad">
+            <div class="trackpad-crosshair"></div>
+            <div class="trackpad-ball" id="trackpadBall"></div>
+          </div>
+          <div class="joystick-readout">
+            <span>Horizontal: <strong id="joystickServo1Value">90°</strong></span>
+            <span>Vertical: <strong id="joystickServo2Value">90°</strong></span>
+          </div>
+          <div class="card-footer-row">
+            <button id="gyroButton" class="toggle" aria-pressed="false">Use gyroscope</button>
+          </div>
+        </div>
+      </div>
     </div>
   </body>
 </html>

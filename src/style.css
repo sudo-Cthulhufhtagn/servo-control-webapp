@@ -288,6 +288,96 @@ button:disabled {
   color: #fecaca;
 }
 
+.joystick-overlay {
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(2, 6, 23, 0.65);
+  backdrop-filter: blur(4px);
+  z-index: 20;
+  padding: 20px;
+}
+
+.joystick-overlay.open {
+  display: flex;
+}
+
+.joystick-modal {
+  width: min(360px, 100%);
+  padding: 24px;
+  display: grid;
+  gap: 16px;
+}
+
+.trackpad {
+  position: relative;
+  width: 220px;
+  height: 220px;
+  margin: 4px auto 0;
+  border-radius: 50%;
+  background: radial-gradient(circle at center, rgba(56, 189, 248, 0.08), rgba(15, 23, 42, 0.6));
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  touch-action: none;
+}
+
+.trackpad-crosshair {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.trackpad-crosshair::before,
+.trackpad-crosshair::after {
+  content: '';
+  position: absolute;
+  background: rgba(148, 163, 184, 0.16);
+}
+
+.trackpad-crosshair::before {
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+}
+
+.trackpad-crosshair::after {
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+}
+
+.trackpad-ball {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), #60a5fa);
+  box-shadow: 0 10px 24px rgba(56, 189, 248, 0.35);
+  transform: translate(-50%, -50%);
+  cursor: grab;
+  touch-action: none;
+}
+
+.trackpad-ball:active {
+  cursor: grabbing;
+}
+
+.joystick-readout {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.joystick-readout strong {
+  color: var(--accent);
+}
+
 @media (max-width: 760px) {
   .dashboard {
     width: min(100vw - 20px, 1080px);
@@ -307,5 +397,15 @@ button:disabled {
 
   .preset-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .trackpad {
+    width: 180px;
+    height: 180px;
+  }
+
+  .trackpad-ball {
+    width: 48px;
+    height: 48px;
   }
 }
