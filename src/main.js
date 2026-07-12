@@ -37,6 +37,8 @@ const elements = {
   trackpadPad: document.getElementById('trackpadPad'),
   trackpadBall: document.getElementById('trackpadBall'),
   gyroButton: document.getElementById('gyroButton'),
+  gyro2Button: document.getElementById('gyro2Button'),
+  joystickOutputButton: document.getElementById('joystickOutputButton'),
   joystickServo1Value: document.getElementById('joystickServo1Value'),
   joystickServo2Value: document.getElementById('joystickServo2Value'),
 };
@@ -57,6 +59,10 @@ let joystickDy = 0;
 let pointerDragging = false;
 let gyroActive = false;
 let gyroCenter = null;
+let gyro2Active = false;
+let gyro2Center = null;
+let targetServo1 = null;
+let targetServo2 = null;
 let padGeometry = null;
 
 function log(message, tone = 'normal') {
@@ -75,6 +81,9 @@ function render() {
   elements.speedSlider.value = String(state.speedMs);
   elements.outputButton.textContent = state.outputHigh ? 'High' : 'Low';
   elements.outputButton.setAttribute('aria-pressed', String(state.outputHigh));
+  elements.joystickOutputButton.textContent = state.outputHigh ? 'High' : 'Low';
+  elements.joystickOutputButton.setAttribute('aria-pressed', String(state.outputHigh));
+  elements.joystickOutputButton.disabled = !state.connected;
   elements.sweep1Button.textContent = state.sweep1Active ? 'Stop sweep 1' : 'Sweep servo 1';
   elements.sweep1Button.setAttribute('aria-pressed', String(state.sweep1Active));
   elements.sweep2Button.textContent = state.sweep2Active ? 'Stop sweep 2' : 'Sweep servo 2';
@@ -129,11 +138,34 @@ function applyVector(nx, ny) {
     joystickDy = 0;
     return;
   }
-  joystickDx = clamp(nx, -1, 1);
+  joystickDx = clamp(-nx, -1, 1);
   joystickDy = clamp(ny, -1, 1);
 }
 
 function joystickTick() {
+  if (gyro2Active) {
+    let changed = false;
+
+    if (targetServo1 !== null && targetServo1 !== state.servo1) {
+      state.servo1 = targetServo1;
+      elements.servo1Slider.value = String(targetServo1);
+      sendCommandQuiet(`servo1:${targetServo1}`);
+      changed = true;
+    }
+
+    if (targetServo2 !== null && targetServo2 !== state.servo2) {
+      state.servo2 = targetServo2;
+      elements.servo2Slider.value = String(targetServo2);
+      sendCommandQuiet(`servo2:${targetServo2}`);
+      changed = true;
+    }
+
+    if (changed) {
+      render();
+    }
+    return;
+  }
+
   if (joystickDx === 0 && joystickDy === 0) {
     return;
   }
@@ -190,7 +222,7 @@ function getPadGeometry() {
 }
 
 function handlePointerDown(event) {
-  if (gyroActive) {
+  if (gyroActive || gyro2Active) {
     return;
   }
   event.preventDefault();
@@ -233,7 +265,16 @@ function handlePointerUp() {
 }
 
 function handleDeviceOrientation(event) {
-  if (!gyroActive || event.beta === null || event.gamma === null) {
+  if (event.beta === null || event.gamma === null) {
+    return;
+  }
+
+  if (gyro2Active) {
+    handleGyro2Orientation(event);
+    return;
+  }
+
+  if (!gyroActive) {
     return;
   }
 
@@ -253,15 +294,63 @@ function handleDeviceOrientation(event) {
   applyVector(nx, ny);
 }
 
+function handleGyro2Orientation(event) {
+  if (!gyro2Center) {
+    gyro2Center = {
+      beta: event.beta,
+      gamma: event.gamma,
+      servo1: state.servo1,
+      servo2: state.servo2,
+    };
+    return;
+  }
+
+  const dGamma = event.gamma - gyro2Center.gamma;
+  const dBeta = event.beta - gyro2Center.beta;
+  targetServo1 = clampAngle(gyro2Center.servo1 + dGamma);
+  targetServo2 = clampAngle(gyro2Center.servo2 - dBeta);
+
+  if (padGeometry) {
+    const nx = clamp(dGamma / GYRO_MAX_DEG, -1, 1);
+    const ny = clamp(-dBeta / GYRO_MAX_DEG, -1, 1);
+    setBallOffset(nx * padGeometry.maxRadius, -ny * padGeometry.maxRadius);
+  }
+}
+
+async function requestGyroPermission() {
+  if (typeof window.DeviceOrientationEvent === 'undefined') {
+    log('device orientation is not available on this device/browser.', 'warn');
+    return false;
+  }
+
+  if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+    try {
+      const permission = await DeviceOrientationEvent.requestPermission();
+      if (permission !== 'granted') {
+        log('gyroscope permission denied.', 'warn');
+        return false;
+      }
+    } catch (error) {
+      log(`gyroscope permission error: ${error.message}`, 'error');
+      return false;
+    }
+  }
+
+  return true;
+}
+
 function enableGyro() {
+  if (gyro2Active) {
+    disableGyro2();
+  }
   gyroActive = true;
   gyroCenter = null;
   padGeometry = getPadGeometry();
   window.addEventListener('deviceorientation', handleDeviceOrientation);
-  elements.gyroButton.textContent = 'Stop gyroscope';
+  elements.gyroButton.textContent = 'Stop Gyro 1';
   elements.gyroButton.setAttribute('aria-pressed', 'true');
   startJoystickLoop();
-  log('gyroscope control enabled — current orientation is the new center');
+  log('Gyro 1 enabled — current orientation is the new center');
 }
 
 function disableGyro() {
@@ -272,13 +361,13 @@ function disableGyro() {
   gyroCenter = null;
   padGeometry = null;
   window.removeEventListener('deviceorientation', handleDeviceOrientation);
-  elements.gyroButton.textContent = 'Use gyroscope';
+  elements.gyroButton.textContent = 'Gyro 1';
   elements.gyroButton.setAttribute('aria-pressed', 'false');
   joystickDx = 0;
   joystickDy = 0;
   resetBallPosition();
   stopJoystickLoop();
-  log('gyroscope control disabled');
+  log('Gyro 1 disabled');
 }
 
 async function toggleGyro() {
@@ -287,25 +376,57 @@ async function toggleGyro() {
     return;
   }
 
-  if (typeof window.DeviceOrientationEvent === 'undefined') {
-    log('device orientation is not available on this device/browser.', 'warn');
+  if (!(await requestGyroPermission())) {
     return;
   }
 
-  if (typeof DeviceOrientationEvent.requestPermission === 'function') {
-    try {
-      const permission = await DeviceOrientationEvent.requestPermission();
-      if (permission !== 'granted') {
-        log('gyroscope permission denied.', 'warn');
-        return;
-      }
-    } catch (error) {
-      log(`gyroscope permission error: ${error.message}`, 'error');
-      return;
-    }
+  enableGyro();
+}
+
+function enableGyro2() {
+  if (gyroActive) {
+    disableGyro();
+  }
+  gyro2Active = true;
+  gyro2Center = null;
+  targetServo1 = null;
+  targetServo2 = null;
+  padGeometry = getPadGeometry();
+  window.addEventListener('deviceorientation', handleDeviceOrientation);
+  elements.gyro2Button.textContent = 'Stop Gyro 2';
+  elements.gyro2Button.setAttribute('aria-pressed', 'true');
+  startJoystickLoop();
+  log('Gyro 2 enabled — current orientation is the new center');
+}
+
+function disableGyro2() {
+  if (!gyro2Active) {
+    return;
+  }
+  gyro2Active = false;
+  gyro2Center = null;
+  targetServo1 = null;
+  targetServo2 = null;
+  padGeometry = null;
+  window.removeEventListener('deviceorientation', handleDeviceOrientation);
+  elements.gyro2Button.textContent = 'Gyro 2';
+  elements.gyro2Button.setAttribute('aria-pressed', 'false');
+  resetBallPosition();
+  stopJoystickLoop();
+  log('Gyro 2 disabled');
+}
+
+async function toggleGyro2() {
+  if (gyro2Active) {
+    disableGyro2();
+    return;
   }
 
-  enableGyro();
+  if (!(await requestGyroPermission())) {
+    return;
+  }
+
+  enableGyro2();
 }
 
 function openJoystick() {
@@ -317,6 +438,9 @@ function openJoystick() {
 function closeJoystick() {
   if (gyroActive) {
     disableGyro();
+  }
+  if (gyro2Active) {
+    disableGyro2();
   }
   if (pointerDragging) {
     handlePointerUp();
@@ -455,11 +579,14 @@ elements.presetButtons.forEach((button) => {
   });
 });
 
-elements.outputButton.addEventListener('click', async () => {
+async function toggleOutput() {
   state.outputHigh = !state.outputHigh;
   render();
   await sendCommand(`out:${state.outputHigh ? 1 : 0}`);
-});
+}
+
+elements.outputButton.addEventListener('click', toggleOutput);
+elements.joystickOutputButton.addEventListener('click', toggleOutput);
 
 elements.clearLogButton.addEventListener('click', () => {
   elements.logList.innerHTML = '';
@@ -468,6 +595,7 @@ elements.clearLogButton.addEventListener('click', () => {
 elements.joystickButton.addEventListener('click', openJoystick);
 elements.joystickCloseButton.addEventListener('click', closeJoystick);
 elements.gyroButton.addEventListener('click', toggleGyro);
+elements.gyro2Button.addEventListener('click', toggleGyro2);
 
 elements.trackpadPad.addEventListener('pointerdown', handlePointerDown);
 elements.trackpadPad.addEventListener('pointermove', handlePointerMove);

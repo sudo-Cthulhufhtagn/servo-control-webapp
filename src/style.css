@@ -164,7 +164,9 @@ h1 {
 
 .card-footer-row {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-start;
+  gap: 10px;
   margin: 10px 0 6px;
 }
 
