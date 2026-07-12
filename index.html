@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bluetooth Servo Control</title>
+    <meta name="description" content="Control two SG90 servos and a digital output from the browser over Bluetooth." />
+    <script type="module" src="/src/main.js"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <div class="backdrop backdrop-a"></div>
+      <div class="backdrop backdrop-b"></div>
+
+      <main class="dashboard">
+        <section class="hero card">
+          <div>
+            <p class="eyebrow">Bluetooth hardware control</p>
+            <h1>Servo + Digital Out</h1>
+            <p class="lede">
+              A browser UI for two SG90 servos and one GPIO output. Connect over Bluetooth and push control
+              changes live.
+            </p>
+          </div>
+
+          <div class="speed-block speed-block-hero">
+            <div class="card-header compact">
+              <h2>Speed</h2>
+              <span id="speedValue" class="value">0 ms</span>
+            </div>
+            <input id="speedSlider" type="range" min="0" max="100" value="0" />
+            <p class="hint">Lower values move faster. This is the delay between interpolation steps sent to the ESP32.</p>
+          </div>
+
+          <div class="connection-row">
+            <button id="connectButton" class="primary">Connect Bluetooth</button>
+            <button id="disconnectButton" class="secondary" disabled>Disconnect</button>
+          </div>
+
+          <div class="status-strip">
+            <span id="connectionPill" class="pill pill-off">Disconnected</span>
+            <span id="protocolPill" class="pill pill-soft">Custom GATT protocol</span>
+          </div>
+        </section>
+
+        <section class="grid">
+          <article class="card control-card">
+            <div class="card-header">
+              <h2>Servo horizontal</h2>
+              <span id="servo1Value" class="value">90°</span>
+            </div>
+            <input id="servo1Slider" type="range" min="0" max="180" value="90" />
+            <div class="preset-row" role="group" aria-label="Servo 1 preset angles">
+              <button class="secondary preset-button" data-servo="1" data-angle="0">0°</button>
+              <button class="secondary preset-button" data-servo="1" data-angle="45">45°</button>
+              <button class="secondary preset-button" data-servo="1" data-angle="90">90°</button>
+              <button class="secondary preset-button" data-servo="1" data-angle="135">135°</button>
+              <button class="secondary preset-button" data-servo="1" data-angle="180">180°</button>
+            </div>
+            <div class="card-footer-row">
+              <button id="sweep1Button" class="toggle" aria-pressed="false">Sweep servo 1</button>
+            </div>
+            <p class="hint">Angle range: 0° to 180°</p>
+          </article>
+
+          <article class="card control-card">
+            <div class="card-header">
+              <h2>Servo vertical</h2>
+              <span id="servo2Value" class="value">90°</span>
+            </div>
+            <input id="servo2Slider" type="range" min="0" max="180" value="90" />
+            <div class="preset-row" role="group" aria-label="Servo 2 preset angles">
+              <button class="secondary preset-button" data-servo="2" data-angle="0">0°</button>
+              <button class="secondary preset-button" data-servo="2" data-angle="45">45°</button>
+              <button class="secondary preset-button" data-servo="2" data-angle="90">90°</button>
+              <button class="secondary preset-button" data-servo="2" data-angle="135">135°</button>
+              <button class="secondary preset-button" data-servo="2" data-angle="180">180°</button>
+            </div>
+            <div class="card-footer-row">
+              <button id="sweep2Button" class="toggle" aria-pressed="false">Sweep servo 2</button>
+            </div>
+            <p class="hint">Angle range: 0° to 180°</p>
+          </article>
+
+          <article class="card control-card wide">
+            <div class="card-header">
+              <div>
+                <h2>Digital Output</h2>
+                <p class="hint">High or low GPIO line.</p>
+              </div>
+              <button id="outputButton" class="toggle" aria-pressed="false">Low</button>
+            </div>
+            <p class="hint">Press the button to switch the output state.</p>
+          </article>
+        </section>
+
+        <section class="card log-card">
+          <div class="card-header">
+            <h2>Command Log</h2>
+            <button id="clearLogButton" class="secondary small">Clear</button>
+          </div>
+          <ol id="logList" class="log-list"></ol>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>
