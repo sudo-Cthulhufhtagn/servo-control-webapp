@@ -185,8 +185,7 @@ const elements = {
   dilationSlider: document.getElementById('dilationSlider'),
   dilationValue: document.getElementById('dilationValue'),
   connectionWarningToast: document.getElementById('connectionWarningToast'),
-  switchToStarmapButton: document.getElementById('switchToStarmapButton'),
-  switchToJoystickButton: document.getElementById('switchToJoystickButton'),
+  panelSwitchButton: document.getElementById('panelSwitchButton'),
 };
 
 const encoder = new TextEncoder();
@@ -593,6 +592,19 @@ function isDesktopViewport() {
   return window.matchMedia('(min-width: 760px)').matches;
 }
 
+// Floating quick-switch button: only relevant on narrow screens where just
+// one of Joystick/Star Map can be open at a time — shows whenever exactly
+// one is open, labeled toward whichever one isn't.
+function updatePanelSwitchButton() {
+  const joystickOpen = elements.joystickOverlay.classList.contains('open');
+  const starmapOpen = elements.starmapOverlay.classList.contains('open');
+  const show = !isDesktopViewport() && joystickOpen !== starmapOpen;
+  elements.panelSwitchButton.hidden = !show;
+  if (show) {
+    elements.panelSwitchButton.textContent = joystickOpen ? 'Switch to Map' : 'Switch to Joystick';
+  }
+}
+
 function openJoystick() {
   if (!isDesktopViewport() && state.starmapOpen) {
     closeStarmap();
@@ -600,6 +612,7 @@ function openJoystick() {
   elements.joystickOverlay.classList.add('open');
   elements.joystickOverlay.setAttribute('aria-hidden', 'false');
   resetBallPosition();
+  updatePanelSwitchButton();
 }
 
 function closeJoystick() {
@@ -617,6 +630,7 @@ function closeJoystick() {
   resetBallPosition();
   elements.joystickOverlay.classList.remove('open');
   elements.joystickOverlay.setAttribute('aria-hidden', 'true');
+  updatePanelSwitchButton();
 }
 
 async function sendCommand(command) {
@@ -741,6 +755,7 @@ function openStarmap() {
   elements.starmapOverlay.classList.add('open');
   elements.starmapOverlay.setAttribute('aria-hidden', 'false');
   renderSky();
+  updatePanelSwitchButton();
 }
 
 function closeStarmap() {
@@ -749,6 +764,7 @@ function closeStarmap() {
   elements.starmapOverlay.setAttribute('aria-hidden', 'true');
   hideTooltip();
   hideSearchResults();
+  updatePanelSwitchButton();
 }
 
 function persistLocation() {
@@ -1541,7 +1557,6 @@ elements.clearLogButton.addEventListener('click', () => {
 
 elements.joystickButton.addEventListener('click', openJoystick);
 elements.joystickCloseButton.addEventListener('click', closeJoystick);
-elements.switchToStarmapButton.addEventListener('click', openStarmap);
 elements.gyroButton.addEventListener('click', toggleGyro);
 elements.gyro2Button.addEventListener('click', toggleGyro2);
 
@@ -1589,7 +1604,6 @@ document.addEventListener('click', (event) => {
 });
 elements.starmapButton.addEventListener('click', openStarmap);
 elements.starmapCloseButton.addEventListener('click', closeStarmap);
-elements.switchToJoystickButton.addEventListener('click', openJoystick);
 elements.toggleConstellationsButton.addEventListener('click', () => {
   state.showConstellations = !state.showConstellations;
   elements.toggleConstellationsButton.setAttribute('aria-pressed', String(state.showConstellations));
@@ -1603,6 +1617,15 @@ elements.toggleMessierButton.addEventListener('click', () => {
 window.addEventListener('resize', () => {
   if (state.starmapOpen) {
     renderSky();
+  }
+  updatePanelSwitchButton();
+});
+
+elements.panelSwitchButton.addEventListener('click', () => {
+  if (elements.joystickOverlay.classList.contains('open')) {
+    openStarmap();
+  } else if (elements.starmapOverlay.classList.contains('open')) {
+    openJoystick();
   }
 });
 

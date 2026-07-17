@@ -13,6 +13,7 @@
       <div class="backdrop backdrop-b"></div>
 
       <button id="settingsButton" class="icon-button" aria-label="Open settings">⚙</button>
+      <button id="panelSwitchButton" class="secondary panel-switch-button" hidden>Switch to Map</button>
 
       <div id="connectionWarningToast" class="toast" role="alert" hidden>
         Not connected — connect over Bluetooth first.
@@ -134,10 +135,7 @@
         <div class="joystick-modal card">
           <div class="card-header">
             <h2>Joystick</h2>
-            <div class="starmap-header-actions">
-              <button id="switchToStarmapButton" class="secondary small mobile-only">Switch to Map</button>
-              <button id="joystickCloseButton" class="secondary small" aria-label="Close joystick">Close</button>
-            </div>
+            <button id="joystickCloseButton" class="secondary small" aria-label="Close joystick">Close</button>
           </div>
           <p class="hint">
             Drag the ball away from center to steer — the further out, the faster the servos move. Horizontal
@@ -174,7 +172,6 @@
             </div>
             <div class="starmap-header-actions">
               <span id="alignmentPill" class="pill pill-off">Not calibrated</span>
-              <button id="switchToJoystickButton" class="secondary small mobile-only">Switch to Joystick</button>
               <button id="starmapCloseButton" class="secondary small" aria-label="Close star map">Close</button>
             </div>
           </div>

@@ -216,6 +216,19 @@ h1 {
   box-shadow: var(--shadow);
 }
 
+.panel-switch-button {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 30;
+  backdrop-filter: blur(10px);
+  box-shadow: var(--shadow);
+}
+
+.panel-switch-button[hidden] {
+  display: none;
+}
+
 .toast {
   position: fixed;
   left: 50%;
@@ -395,14 +408,6 @@ button:disabled {
   align-items: center;
   gap: 10px;
   flex-shrink: 0;
-}
-
-/* Quick-switch buttons between the Joystick and Star Map panels: only
-   needed on narrow screens, where only one panel can be open at a time —
-   on desktop both are already independently reachable via their own
-   buttons on the main page. */
-.mobile-only {
-  display: none;
 }
 
 .starmap-location-row {
@@ -710,10 +715,6 @@ button:disabled {
   .dashboard {
     width: min(100vw - 20px, 1080px);
     padding-top: 20px;
-  }
-
-  .mobile-only {
-    display: inline-flex;
   }
 
   .grid,
