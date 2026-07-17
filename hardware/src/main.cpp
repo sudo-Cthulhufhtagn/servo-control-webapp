@@ -163,6 +163,21 @@ class CommandCallback : public BLECharacteristicCallbacks {
   }
 };
 
+class ServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer *server) override {
+    Serial.println("BLE client connected");
+  }
+
+  void onDisconnect(BLEServer *server) override {
+    // The BLE stack does not resume advertising on its own after a client
+    // disconnects (including a browser tab reload dropping the connection
+    // without a clean gatt.disconnect()) — without this, the device becomes
+    // unreachable until it is power-cycled.
+    Serial.println("BLE client disconnected, restarting advertising");
+    server->getAdvertising()->start();
+  }
+};
+
 void setupServos() {
   servo1.setPeriodHertz(50);
   servo2.setPeriodHertz(50);
@@ -215,6 +230,7 @@ void updateServoMotion() {
 void setupBle() {
   BLEDevice::init(kBleName);
   BLEServer *server = BLEDevice::createServer();
+  server->setCallbacks(new ServerCallbacks());
   BLEService *service = server->createService(kServiceUuid);
 
   BLECharacteristic *commandChar = service->createCharacteristic(
