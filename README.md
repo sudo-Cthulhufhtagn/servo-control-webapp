@@ -1,36 +1,56 @@
-# Bluetooth Servo Controller Monorepo
+# Bluetooth Servo Mount + Star Map
 
-Simple hardware + software project for controlling two SG90 servos and one digital output from a web browser over Bluetooth.
+A two-servo pan/tilt (yaw/pitch) mount and digital output, controlled from a browser over Web Bluetooth — with a
+built-in sky map that can align the mount against real stars and then automatically slew it to any star,
+constellation, or Messier object.
 
-The browser app talks directly to the controller over Web Bluetooth. A server-side bridge can be added later if you want a local relay or a non-Bluetooth transport.
+The browser talks directly to the ESP32-C3 controller over Web Bluetooth. There is no server-side bridge — the
+whole system is just a static web app + firmware.
 
 ## What It Does
 
-- Controls 2x SG90 servos from a browser UI.
-- Sets 1 digital output high or low.
-- Sends commands over Bluetooth from the browser.
-- Uses a server-side bridge when the browser cannot talk to the device directly.
+- Drives 2x SG90 servos (yaw + pitch, 0–180° each) and 1 digital output (high/low) from a browser UI.
+- Manual control via sliders, angle presets, sweep, an on-screen joystick (trackpad drag, phone-tilt "Gyro 1", or
+  direct-angle "Gyro 2"), all disableable behind a collapsible "Manual servo control" panel.
+- A star map (`Star Map` button) that:
+  - Computes live Alt/Az for ~30 bright named stars, all 88 IAU constellations, and the full 110-object Messier
+    catalog, from your location and the current time (via `astronomy-engine`).
+  - Lets you **calibrate** the mount against 3 real stars — aim the mount manually (joystick/sliders), confirm each
+    point, and it solves for the arbitrary 3D rotation between the mount's own frame and the true sky (Wahba's
+    problem via Davenport's q-method), which handles a mount that isn't level or aligned to true north.
+  - Once calibrated, **"Slew here"** points the mount at any selected star/constellation-center/Messier object;
+    **"Slew around"** tours every star in a selected constellation's figure (with a settings-configurable dilated
+    border so it traces around the shape rather than landing exactly on each star).
+  - Search by name (filtered to whichever layers — constellations / Messier — are currently toggled on), or click
+    stars/constellation lines/Messier markers directly on the map; hover shows names.
+  - Shows a live crosshair for where the mount is *actually* pointing right now, separate from any selected target,
+    so it's visible if you nudge the joystick after a slew.
+- Settings (gear icon, top-right): interpolation speed, slew-around border angle, and Disconnect.
+- On desktop, the Joystick and Star Map panels are independent floating panels that can both be open at once
+  (calibration needs the joystick usable while watching the map); on narrow/mobile screens only one is open at a
+  time. Esc closes any open panel.
+- Controls stay clickable even before connecting — sending anything while disconnected just shows a warning toast
+  instead of doing nothing silently.
 
 ## Monorepo Layout
 
-The repository is organized as a simple monorepo so the UI and hardware code can evolve together.
-
 ```text
 .
-├── webapp/        # Browser UI for sliders, buttons, and Bluetooth connection status
-├── server/        # Optional future bridge service
-├── hardware/      # Embedded firmware for the controller board
+├── platformio.ini   # PlatformIO project config (src/include/lib dirs point into hardware/)
+├── hardware/        # ESP32-C3 firmware (src/, include/, lib/, test/)
+├── webapp/          # Browser UI (Vite, vanilla JS)
 └── README.md
 ```
 
-This repository currently contains the embedded PlatformIO project used on the controller board and a browser UI in `webapp/`.
+`platformio.ini` lives at the repo root so a plain `pio run` works from there; it points `src_dir`/`include_dir`/
+`lib_dir`/`test_dir` at the corresponding folders under `hardware/`.
 
 ## Hardware
 
 - Controller board: Adafruit QT Py ESP32-C3
-- Servo 1: SG90
-- Servo 2: SG90
-- Digital output: 1 GPIO output, toggled high/low
+- Servo 1 (yaw): SG90, GPIO0
+- Servo 2 (pitch): SG90, GPIO1
+- Digital output: GPIO2, toggled high/low
 
 ### Notes
 
@@ -40,31 +60,41 @@ This repository currently contains the embedded PlatformIO project used on the c
 
 ## Software
 
-### Web App
+### Web App (`webapp/`)
 
-- Runs in the browser.
-- Provides controls for servo position and digital output state.
-- Connects through Web Bluetooth when supported by the browser.
-- Uses a custom GATT service and command characteristic defined in `webapp/src/main.js`.
+- Vanilla JS + Vite, no framework.
+- Connects via Web Bluetooth to a custom GATT service/characteristic (UUIDs in `webapp/src/main.js` and
+  `hardware/src/main.cpp` — must match).
+- Star map math lives in `webapp/src/sky-math.js` (Alt/Az via `astronomy-engine`) and `webapp/src/mount-align.js`
+  (servo-angle ⟷ unit-vector mapping, Wahba's-problem solver, goto inverse). Catalogs are static data in
+  `stars.js`, `constellations.js`, `messier.js`.
+- Calibration and the last-known geolocation persist in `localStorage`; servo/connection state does not (a fresh
+  page load needs a fresh connection, but not necessarily a fresh calibration).
 
-### Server Bridge
+### Firmware (`hardware/src/main.cpp`)
 
-- Receives commands from the web app when a local bridge is needed.
-- Forwards those commands to the hardware controller.
-- Keeps the browser UI simple and focused on control.
+- Runs on the ESP32-C3, advertises the GATT service, parses newline-terminated text commands from either the BLE
+  characteristic or the USB serial console.
+- Interpolates both servos toward their targets at a configurable step delay (`speed:<ms>`), independent sweep
+  mode per servo, and the digital output.
+- Restarts BLE advertising on client disconnect (`BLEServerCallbacks::onDisconnect`) — without this the board
+  becomes unreachable after any disconnect (including a browser tab reload) until power-cycled.
 
-### Firmware
+## Command Format
 
-- Runs on the ESP32-C3 controller board.
-- Receives commands.
-- Moves both servos.
-- Sets the digital output high or low.
+Newline-terminated text commands, written to the BLE characteristic (or sent over serial):
+
+- `servo1:<0-180>` — set yaw
+- `servo2:<0-180>` — set pitch
+- `servos:<0-180>,<0-180>` — set both yaw and pitch in one write (used wherever both axes move together, e.g. the
+  joystick and star-map goto, so they slew as one motion instead of racing each other)
+- `speed:<0-100>` — ms delay between 1° interpolation steps (lower = faster)
+- `sweep1:<0|1>`, `sweep2:<0|1>` — continuous 0↔180° sweep per servo
+- `out:<0|1>` — digital output low/high
 
 ## Development
 
-The embedded project uses PlatformIO.
-
-Run the web UI on Windows:
+Web app:
 
 ```powershell
 cd webapp
@@ -72,64 +102,44 @@ npm install
 npm run dev
 ```
 
-Open the local Vite URL that appears in the terminal, then connect from a Chromium-based browser that supports Web Bluetooth.
+Open the local Vite URL, then connect from a Chromium-based browser that supports Web Bluetooth (desktop Chrome/
+Edge, or Android Chrome — not supported on iOS).
+
+Firmware, from the repo root:
+
+```bash
+platformio run --target upload
+platformio device monitor
+```
 
 ## Docker Deploy
 
-The frontend can be built into a static Docker image from `webapp/`.
-
-Build locally:
+The frontend builds into a static Docker image from `webapp/`.
 
 ```bash
 cd webapp
 docker build -t servo-control-webapp:latest .
-```
-
-Run locally:
-
-```bash
 docker run --rm -p 8080:80 servo-control-webapp:latest
 ```
 
-Publish to your registry by tagging and pushing the image after logging in, for example:
+Publish to your registry by tagging and pushing after logging in:
 
 ```bash
 docker tag servo-control-webapp:latest your-registry.example.com/servo-control-webapp:latest
 docker push your-registry.example.com/servo-control-webapp:latest
 ```
 
-If you want, I can also add a `docker-compose.yml` or a GitHub Actions workflow for automated builds and pushes.
-
 Coolify deploy helper:
 
 ```powershell
-.\deploy-coolify.ps1 -CoolifyDomain "YOUR_COOLIFY_DOMAIN" -AppUuid "YOUR_APP_UUID" -Token "YOUR_COOLIFY_TOKEN"
+.\webapp\deploy-coolify.ps1 -CoolifyDomain "YOUR_COOLIFY_DOMAIN" -AppUuid "YOUR_APP_UUID" -Token "YOUR_COOLIFY_TOKEN"
 ```
 
-Build and upload:
+GitHub Pages deploys automatically on push to `master` via `.github/workflows/pages.yml` (builds `webapp/`,
+publishes `webapp/dist`).
 
-```bash
-platformio run --target upload
-```
+## Status / Known Gaps
 
-Open the serial monitor:
-
-```bash
-platformio device monitor
-```
-
-## Command Format
-
-The exact command format can be whatever the web app and firmware agree on. A simple approach is:
-
-- `servo1:90`
-- `servo2:180`
-- `out:1`
-- `out:0`
-
-## Future Work
-
-- Add the web UI.
-- Add the Bluetooth transport layer.
-- Add the server bridge protocol.
-- Add firmware for both servos and the digital output.
+- The star map, calibration, search, and slew-around features are implemented and pass build/math-level checks,
+  but haven't all been driven end-to-end in a browser against real hardware yet.
+- iOS is not a target (no Web Bluetooth support in Safari).
