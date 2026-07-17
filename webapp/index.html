@@ -134,7 +134,10 @@
         <div class="joystick-modal card">
           <div class="card-header">
             <h2>Joystick</h2>
-            <button id="joystickCloseButton" class="secondary small" aria-label="Close joystick">Close</button>
+            <div class="starmap-header-actions">
+              <button id="switchToStarmapButton" class="secondary small mobile-only">Switch to Map</button>
+              <button id="joystickCloseButton" class="secondary small" aria-label="Close joystick">Close</button>
+            </div>
           </div>
           <p class="hint">
             Drag the ball away from center to steer — the further out, the faster the servos move. Horizontal
@@ -171,6 +174,7 @@
             </div>
             <div class="starmap-header-actions">
               <span id="alignmentPill" class="pill pill-off">Not calibrated</span>
+              <button id="switchToJoystickButton" class="secondary small mobile-only">Switch to Joystick</button>
               <button id="starmapCloseButton" class="secondary small" aria-label="Close star map">Close</button>
             </div>
           </div>
@@ -178,10 +182,10 @@
           <div class="starmap-location-row">
             <button id="locateButton" class="secondary">Use my location</button>
             <label class="starmap-field">Lat
-              <input id="latInput" type="number" step="0.0001" placeholder="51.5074" />
+              <input id="latInput" type="number" step="0.0001" placeholder="52.3676" />
             </label>
             <label class="starmap-field">Lon
-              <input id="lonInput" type="number" step="0.0001" placeholder="-0.1278" />
+              <input id="lonInput" type="number" step="0.0001" placeholder="4.9041" />
             </label>
           </div>
           <p id="locationStatus" class="hint">Location not set.</p>

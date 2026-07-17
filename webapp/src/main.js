@@ -100,6 +100,9 @@ const COMMAND_UUID = '6f94b031-1c3a-4c44-8f19-1f8b31d71f40';
 const LOCATION_STORAGE_KEY = 'starmap:location';
 const CALIBRATION_STORAGE_KEY = 'starmap:calibration';
 const DEG2RAD = Math.PI / 180;
+// Default location until the user sets their own (geolocation, manual entry,
+// or a previously persisted choice) — Amsterdam.
+const DEFAULT_LOCATION = { latitude: 52.3676, longitude: 4.9041 };
 
 const state = {
   connected: false,
@@ -111,7 +114,7 @@ const state = {
   sweep1Active: false,
   sweep2Active: false,
   speedMs: 10,
-  location: null,
+  location: { ...DEFAULT_LOCATION },
   selectedObject: null,
   starmapOpen: false,
   showConstellations: true,
@@ -182,6 +185,8 @@ const elements = {
   dilationSlider: document.getElementById('dilationSlider'),
   dilationValue: document.getElementById('dilationValue'),
   connectionWarningToast: document.getElementById('connectionWarningToast'),
+  switchToStarmapButton: document.getElementById('switchToStarmapButton'),
+  switchToJoystickButton: document.getElementById('switchToJoystickButton'),
 };
 
 const encoder = new TextEncoder();
@@ -752,22 +757,27 @@ function persistLocation() {
   }
 }
 
+function reflectLocationInUI() {
+  elements.latInput.value = state.location.latitude;
+  elements.lonInput.value = state.location.longitude;
+  elements.locationStatus.textContent = `Location set: ${state.location.latitude.toFixed(4)}, ${state.location.longitude.toFixed(4)}`;
+}
+
 function loadPersistedLocation() {
   try {
     const raw = localStorage.getItem(LOCATION_STORAGE_KEY);
     if (!raw) {
+      reflectLocationInUI();
       return;
     }
     const parsed = JSON.parse(raw);
     if (Number.isFinite(parsed.latitude) && Number.isFinite(parsed.longitude)) {
       state.location = parsed;
-      elements.latInput.value = parsed.latitude;
-      elements.lonInput.value = parsed.longitude;
-      elements.locationStatus.textContent = `Location set: ${parsed.latitude.toFixed(4)}, ${parsed.longitude.toFixed(4)}`;
     }
   } catch {
     // ignore corrupt storage
   }
+  reflectLocationInUI();
 }
 
 function persistCalibration() {
@@ -800,9 +810,7 @@ function loadPersistedCalibration() {
 
 function setLocation(latitude, longitude) {
   state.location = { latitude, longitude };
-  elements.latInput.value = latitude;
-  elements.lonInput.value = longitude;
-  elements.locationStatus.textContent = `Location set: ${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
+  reflectLocationInUI();
   persistLocation();
   renderSky();
 }
@@ -1533,6 +1541,7 @@ elements.clearLogButton.addEventListener('click', () => {
 
 elements.joystickButton.addEventListener('click', openJoystick);
 elements.joystickCloseButton.addEventListener('click', closeJoystick);
+elements.switchToStarmapButton.addEventListener('click', openStarmap);
 elements.gyroButton.addEventListener('click', toggleGyro);
 elements.gyro2Button.addEventListener('click', toggleGyro2);
 
@@ -1580,6 +1589,7 @@ document.addEventListener('click', (event) => {
 });
 elements.starmapButton.addEventListener('click', openStarmap);
 elements.starmapCloseButton.addEventListener('click', closeStarmap);
+elements.switchToJoystickButton.addEventListener('click', openJoystick);
 elements.toggleConstellationsButton.addEventListener('click', () => {
   state.showConstellations = !state.showConstellations;
   elements.toggleConstellationsButton.setAttribute('aria-pressed', String(state.showConstellations));
