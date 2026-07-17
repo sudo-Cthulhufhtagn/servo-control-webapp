@@ -12,6 +12,38 @@
       <div class="backdrop backdrop-a"></div>
       <div class="backdrop backdrop-b"></div>
 
+      <button id="settingsButton" class="icon-button" aria-label="Open settings">⚙</button>
+
+      <div id="connectionWarningToast" class="toast" role="alert" hidden>
+        Not connected — connect over Bluetooth first.
+      </div>
+
+      <div id="settingsOverlay" class="settings-overlay" aria-hidden="true">
+        <div class="settings-modal card">
+          <div class="card-header">
+            <h2>Settings</h2>
+            <button id="settingsCloseButton" class="secondary small" aria-label="Close settings">Close</button>
+          </div>
+          <div class="speed-block">
+            <div class="card-header compact">
+              <h2>Speed</h2>
+              <span id="speedValue" class="value">10 ms</span>
+            </div>
+            <input id="speedSlider" type="range" min="0" max="100" value="10" />
+            <p class="hint">Lower values move faster. This is the delay between interpolation steps sent to the ESP32.</p>
+          </div>
+          <div class="speed-block">
+            <div class="card-header compact">
+              <h2>Slew-around border</h2>
+              <span id="dilationValue" class="value">1°</span>
+            </div>
+            <input id="dilationSlider" type="range" min="0" max="10" step="0.5" value="1" />
+            <p class="hint">Extra margin the "Slew around" tour traces outside a constellation's shape.</p>
+          </div>
+          <button id="disconnectButton" class="secondary" disabled>Disconnect</button>
+        </div>
+      </div>
+
       <main class="dashboard">
         <section class="hero card">
           <div>
@@ -23,19 +55,10 @@
             </p>
           </div>
 
-          <div class="speed-block speed-block-hero">
-            <div class="card-header compact">
-              <h2>Speed</h2>
-              <span id="speedValue" class="value">0 ms</span>
-            </div>
-            <input id="speedSlider" type="range" min="0" max="100" value="0" />
-            <p class="hint">Lower values move faster. This is the delay between interpolation steps sent to the ESP32.</p>
-          </div>
-
           <div class="connection-row">
             <button id="connectButton" class="primary">Connect Bluetooth</button>
-            <button id="disconnectButton" class="secondary" disabled>Disconnect</button>
-            <button id="joystickButton" class="secondary" disabled>Joystick</button>
+            <button id="joystickButton" class="secondary">Joystick</button>
+            <button id="starmapButton" class="secondary">Star Map</button>
           </div>
 
           <div class="status-strip">
@@ -44,101 +67,59 @@
           </div>
         </section>
 
-        <section class="grid">
-          <article class="card control-card">
-            <div class="card-header">
-              <h2>Servo horizontal</h2>
-              <span id="servo1Value" class="value">90°</span>
-            </div>
-            <input id="servo1Slider" type="range" min="0" max="180" value="90" />
-            <div class="preset-row" role="group" aria-label="Servo 1 preset angles">
-              <button class="secondary preset-button" data-servo="1" data-angle="0">0°</button>
-              <button class="secondary preset-button" data-servo="1" data-angle="45">45°</button>
-              <button class="secondary preset-button" data-servo="1" data-angle="90">90°</button>
-              <button class="secondary preset-button" data-servo="1" data-angle="135">135°</button>
-              <button class="secondary preset-button" data-servo="1" data-angle="180">180°</button>
-            </div>
-            <div class="card-footer-row">
-              <button id="sweep1Button" class="toggle" aria-pressed="false">Sweep servo 1</button>
-            </div>
-            <p class="hint">Angle range: 0° to 180°</p>
-          </article>
-
-          <article class="card control-card">
-            <div class="card-header">
-              <h2>Servo vertical</h2>
-              <span id="servo2Value" class="value">90°</span>
-            </div>
-            <input id="servo2Slider" type="range" min="0" max="180" value="90" />
-            <div class="preset-row" role="group" aria-label="Servo 2 preset angles">
-              <button class="secondary preset-button" data-servo="2" data-angle="0">0°</button>
-              <button class="secondary preset-button" data-servo="2" data-angle="45">45°</button>
-              <button class="secondary preset-button" data-servo="2" data-angle="90">90°</button>
-              <button class="secondary preset-button" data-servo="2" data-angle="135">135°</button>
-              <button class="secondary preset-button" data-servo="2" data-angle="180">180°</button>
-            </div>
-            <div class="card-footer-row">
-              <button id="sweep2Button" class="toggle" aria-pressed="false">Sweep servo 2</button>
-            </div>
-            <p class="hint">Angle range: 0° to 180°</p>
-          </article>
-
-          <article class="card control-card wide">
-            <div class="card-header">
-              <div>
-                <h2>Digital Output</h2>
-                <p class="hint">High or low GPIO line.</p>
+        <details class="servo-details">
+          <summary>Manual servo control</summary>
+          <div class="servo-details-body">
+            <article class="card control-card">
+              <div class="card-header">
+                <h2>Servo horizontal</h2>
+                <span id="servo1Value" class="value">90°</span>
               </div>
-              <button id="outputButton" class="toggle" aria-pressed="false">Low</button>
-            </div>
-            <p class="hint">Press the button to switch the output state.</p>
-          </article>
-        </section>
-
-        <section class="card starmap-card">
-          <div class="card-header">
-            <div>
-              <h2>Star Map &amp; Mount Alignment</h2>
-              <p class="hint">
-                Aim the mount at 3 real stars (using the sliders or joystick above) to calibrate, then pick any
-                star to slew there automatically.
-              </p>
-            </div>
-            <span id="alignmentPill" class="pill pill-off">Not calibrated</span>
-          </div>
-
-          <div class="starmap-location-row">
-            <button id="locateButton" class="secondary">Use my location</button>
-            <label class="starmap-field">Lat
-              <input id="latInput" type="number" step="0.0001" placeholder="51.5074" />
-            </label>
-            <label class="starmap-field">Lon
-              <input id="lonInput" type="number" step="0.0001" placeholder="-0.1278" />
-            </label>
-          </div>
-          <p id="locationStatus" class="hint">Location not set.</p>
-
-          <div class="starmap-body">
-            <canvas id="skyCanvas" class="sky-canvas" width="480" height="480"></canvas>
-
-            <div class="starmap-panel">
-              <div class="starmap-readout">
-                <span>Servo1: <strong id="starmapServo1Value">90°</strong></span>
-                <span>Servo2: <strong id="starmapServo2Value">90°</strong></span>
+              <input id="servo1Slider" type="range" min="0" max="180" value="90" />
+              <div class="preset-row" role="group" aria-label="Servo 1 preset angles">
+                <button class="secondary preset-button" data-servo="1" data-angle="0">0°</button>
+                <button class="secondary preset-button" data-servo="1" data-angle="45">45°</button>
+                <button class="secondary preset-button" data-servo="1" data-angle="90">90°</button>
+                <button class="secondary preset-button" data-servo="1" data-angle="135">135°</button>
+                <button class="secondary preset-button" data-servo="1" data-angle="180">180°</button>
               </div>
-
-              <p id="selectedStarInfo" class="hint">Tap a star on the map to select it.</p>
-
               <div class="card-footer-row">
-                <button id="calibrateStartButton" class="secondary">Start calibration</button>
-                <button id="calibrateConfirmButton" class="toggle" disabled>Confirm point</button>
-                <button id="gotoButton" class="primary" disabled>Slew here</button>
+                <button id="sweep1Button" class="toggle" aria-pressed="false">Sweep servo 1</button>
               </div>
+              <p class="hint">Angle range: 0° to 180°</p>
+            </article>
 
-              <ol id="calibrationStepsList" class="calibration-steps"></ol>
-            </div>
+            <article class="card control-card">
+              <div class="card-header">
+                <h2>Servo vertical</h2>
+                <span id="servo2Value" class="value">90°</span>
+              </div>
+              <input id="servo2Slider" type="range" min="0" max="180" value="90" />
+              <div class="preset-row" role="group" aria-label="Servo 2 preset angles">
+                <button class="secondary preset-button" data-servo="2" data-angle="0">0°</button>
+                <button class="secondary preset-button" data-servo="2" data-angle="45">45°</button>
+                <button class="secondary preset-button" data-servo="2" data-angle="90">90°</button>
+                <button class="secondary preset-button" data-servo="2" data-angle="135">135°</button>
+                <button class="secondary preset-button" data-servo="2" data-angle="180">180°</button>
+              </div>
+              <div class="card-footer-row">
+                <button id="sweep2Button" class="toggle" aria-pressed="false">Sweep servo 2</button>
+              </div>
+              <p class="hint">Angle range: 0° to 180°</p>
+            </article>
+
+            <article class="card control-card wide">
+              <div class="card-header">
+                <div>
+                  <h2>Digital Output</h2>
+                  <p class="hint">High or low GPIO line.</p>
+                </div>
+                <button id="outputButton" class="toggle" aria-pressed="false">Low</button>
+              </div>
+              <p class="hint">Press the button to switch the output state.</p>
+            </article>
           </div>
-        </section>
+        </details>
 
         <section class="card log-card">
           <div class="card-header">
@@ -171,6 +152,80 @@
             <button id="gyroButton" class="toggle" aria-pressed="false" title="Tilt steers like the trackpad — further tilt moves faster.">Gyro 1</button>
             <button id="gyro2Button" class="toggle" aria-pressed="false" title="Servos track tilt angle directly. Recalibrates to center on press.">Gyro 2</button>
             <button id="joystickOutputButton" class="toggle" aria-pressed="false">Low</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="starmapOverlay" class="starmap-overlay" aria-hidden="true">
+        <div class="starmap-modal card">
+          <div class="card-header">
+            <div>
+              <h2>Star Map &amp; Mount Alignment</h2>
+              <p class="hint">
+                Aim the mount at 3 real stars (using the sliders or joystick) to calibrate, then pick any star to
+                slew there automatically. The yellow crosshair shows where the mount is actually pointing right
+                now — it'll drift from a selected target if you nudge the joystick afterward. Search or click a
+                constellation's lines to select it — "Slew here" points at its center, "Slew around" tours each
+                star in the figure.
+              </p>
+            </div>
+            <div class="starmap-header-actions">
+              <span id="alignmentPill" class="pill pill-off">Not calibrated</span>
+              <button id="starmapCloseButton" class="secondary small" aria-label="Close star map">Close</button>
+            </div>
+          </div>
+
+          <div class="starmap-location-row">
+            <button id="locateButton" class="secondary">Use my location</button>
+            <label class="starmap-field">Lat
+              <input id="latInput" type="number" step="0.0001" placeholder="51.5074" />
+            </label>
+            <label class="starmap-field">Lon
+              <input id="lonInput" type="number" step="0.0001" placeholder="-0.1278" />
+            </label>
+          </div>
+          <p id="locationStatus" class="hint">Location not set.</p>
+
+          <div class="starmap-search">
+            <input
+              id="searchInput"
+              type="search"
+              class="starmap-search-input"
+              placeholder="Search stars, constellations, M-objects..."
+              autocomplete="off"
+            />
+            <button id="searchButton" class="secondary small" aria-label="Search">🔍</button>
+            <ul id="searchResults" class="search-results" hidden></ul>
+          </div>
+
+          <div class="starmap-body">
+            <div class="starmap-layers" role="group" aria-label="Map layers">
+              <button id="toggleConstellationsButton" class="toggle small" aria-pressed="true">Constellations</button>
+              <button id="toggleMessierButton" class="toggle small" aria-pressed="true">Deep-sky (M)</button>
+            </div>
+
+            <div id="skyCanvasWrap" class="sky-canvas-wrap">
+              <canvas id="skyCanvas" class="sky-canvas" width="480" height="480"></canvas>
+              <div id="skyTooltip" class="sky-tooltip" hidden></div>
+            </div>
+
+            <div class="starmap-panel">
+              <div class="starmap-readout">
+                <span>Servo1: <strong id="starmapServo1Value">90°</strong></span>
+                <span>Servo2: <strong id="starmapServo2Value">90°</strong></span>
+              </div>
+
+              <p id="selectedStarInfo" class="hint">Tap a star on the map to select it.</p>
+
+              <div class="card-footer-row">
+                <button id="calibrateStartButton" class="secondary">Start calibration</button>
+                <button id="calibrateConfirmButton" class="toggle" disabled>Confirm point</button>
+                <button id="gotoButton" class="primary" disabled>Slew here</button>
+                <button id="slewAroundButton" class="secondary" disabled>Slew around</button>
+              </div>
+
+              <ol id="calibrationStepsList" class="calibration-steps"></ol>
+            </div>
           </div>
         </div>
       </div>

@@ -7,17 +7,27 @@ import {
   HorizonFromVector,
 } from 'astronomy-engine';
 
-// True Alt/Az of a J2000 catalog star, for an observer at a given place/time.
-// Handles precession/nutation/sidereal time via astronomy-engine's rotation
-// matrices rather than hand-rolled trig.
-export function starAltAz(star, date, latitude, longitude) {
+// Builds a reusable RA/Dec -> Alt/Az projector for a fixed date/location.
+// The EQJ->HOR rotation matrix only depends on date+observer, not on the
+// object being projected, so computing it once and reusing it is much
+// cheaper than rebuilding it per-star when projecting hundreds of
+// constellation-line points in a single render pass.
+export function makeHorizonProjector(date, latitude, longitude) {
   const observer = new Observer(latitude, longitude, 0);
-  const equatorialJ2000 = new Spherical(star.dec, star.ra * 15, 1);
-  const vecEqj = VectorFromSphere(equatorialJ2000, date);
   const rotation = Rotation_EQJ_HOR(date, observer);
-  const vecHor = RotateVector(rotation, vecEqj);
-  const horizontal = HorizonFromVector(vecHor, 'normal');
-  return { altitude: horizontal.lat, azimuth: horizontal.lon };
+  return (raHours, decDeg) => {
+    const vecEqj = VectorFromSphere(new Spherical(decDeg, raHours * 15, 1), date);
+    const vecHor = RotateVector(rotation, vecEqj);
+    const horizontal = HorizonFromVector(vecHor, 'normal');
+    return { altitude: horizontal.lat, azimuth: horizontal.lon };
+  };
+}
+
+// True Alt/Az of a single J2000 catalog object, for an observer at a given
+// place/time. Handles precession/nutation/sidereal time via
+// astronomy-engine's rotation matrices rather than hand-rolled trig.
+export function starAltAz(star, date, latitude, longitude) {
+  return makeHorizonProjector(date, latitude, longitude)(star.ra, star.dec);
 }
 
 const DEG2RAD = Math.PI / 180;

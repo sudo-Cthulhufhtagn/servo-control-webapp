@@ -1,7 +1,99 @@
 import './style.css';
 import { STARS } from './stars.js';
-import { starAltAz, altAzToUnit } from './sky-math.js';
-import { localUnitToServo, solveAlignment, trueToLocal } from './mount-align.js';
+import { CONSTELLATIONS } from './constellations.js';
+import { MESSIER } from './messier.js';
+import { starAltAz, altAzToUnit, unitToAltAz, makeHorizonProjector } from './sky-math.js';
+import {
+  localUnitToServo,
+  servoToLocalUnit,
+  solveAlignment,
+  trueToLocal,
+  localToTrue,
+} from './mount-align.js';
+
+const CONSTELLATIONS_BY_ID = new Map(CONSTELLATIONS.map((c) => [c.id, c]));
+
+function objectLabel(obj) {
+  if (obj.kind === 'star' || obj.kind === 'constellation') {
+    return obj.name;
+  }
+  return obj.name ? `${obj.id} (${obj.name})` : obj.id;
+}
+
+// Unique [ra, dec] vertices of a constellation's stick-figure lines, in
+// first-occurrence order (shared vertices repeat verbatim across segments in
+// the source data, so a simple string key dedupes them). Order roughly
+// traces the figure's shape, which is what makes "slew around" look like a
+// tour rather than a random jump between points.
+function constellationVertices(constellation) {
+  const seen = new Set();
+  const vertices = [];
+  constellation.lines.forEach((segment) => {
+    segment.forEach(([ra, dec]) => {
+      const key = `${ra},${dec}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        vertices.push({ ra, dec });
+      }
+    });
+  });
+  return vertices;
+}
+
+// Reuses altAzToUnit/unitToAltAz (identical spherical math) by passing dec in
+// place of altitude and ra-in-degrees in place of azimuth — these operate on
+// fixed J2000 equatorial positions, not live alt/az.
+function raDecToUnit(raHours, decDeg) {
+  return altAzToUnit(decDeg, raHours * 15);
+}
+
+function unitToRaDec(vec) {
+  const { altitude, azimuth } = unitToAltAz(vec);
+  return { ra: azimuth / 15, dec: altitude };
+}
+
+function dot3(a, b) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+// Fixed J2000 RA/Dec "center" of a constellation, from the mean unit vector
+// of its stick-figure vertices — a fixed equatorial position, so it behaves
+// exactly like a star's ra/dec for starAltAz() at goto time.
+function constellationCentroid(constellation) {
+  const vertices = constellationVertices(constellation);
+  const sum = vertices.reduce(
+    (acc, { ra, dec }) => {
+      const [x, y, z] = raDecToUnit(ra, dec);
+      return [acc[0] + x, acc[1] + y, acc[2] + z];
+    },
+    [0, 0, 0],
+  );
+  const length = Math.hypot(...sum);
+  return unitToRaDec([sum[0] / length, sum[1] / length, sum[2] / length]);
+}
+
+// Pushes a vertex outward along the great circle from the constellation's
+// centroid through that vertex, by an extra `extraDeg` of arc — so "slew
+// around" traces a dilated border around the shape instead of landing
+// exactly on each star (settings-controlled, default 1°).
+function dilateRaDec(vertex, centroidUnit, extraDeg) {
+  if (!extraDeg) {
+    return vertex;
+  }
+
+  const vertexUnit = raDecToUnit(vertex.ra, vertex.dec);
+  const cosOmega = Math.max(-1, Math.min(1, dot3(centroidUnit, vertexUnit)));
+  const omega = Math.acos(cosOmega);
+  if (omega < 1e-6) {
+    return vertex;
+  }
+
+  const sinOmega = Math.sin(omega);
+  const tangent = [0, 1, 2].map((i) => (vertexUnit[i] - cosOmega * centroidUnit[i]) / sinOmega);
+  const theta = omega + extraDeg * DEG2RAD;
+  const dilated = [0, 1, 2].map((i) => Math.cos(theta) * centroidUnit[i] + Math.sin(theta) * tangent[i]);
+  return unitToRaDec(dilated);
+}
 
 const SERVICE_UUID = '6f94b030-1c3a-4c44-8f19-1f8b31d71f40';
 const COMMAND_UUID = '6f94b031-1c3a-4c44-8f19-1f8b31d71f40';
@@ -18,10 +110,13 @@ const state = {
   outputHigh: false,
   sweep1Active: false,
   sweep2Active: false,
-  speedMs: 0,
+  speedMs: 10,
   location: null,
-  selectedStar: null,
-  selectedStarAltAz: null,
+  selectedObject: null,
+  starmapOpen: false,
+  showConstellations: true,
+  showMessier: true,
+  slewAroundDilationDeg: 1,
   calibrating: false,
   calibration: {
     points: [],
@@ -63,13 +158,30 @@ const elements = {
   lonInput: document.getElementById('lonInput'),
   locationStatus: document.getElementById('locationStatus'),
   skyCanvas: document.getElementById('skyCanvas'),
+  skyCanvasWrap: document.getElementById('skyCanvasWrap'),
+  skyTooltip: document.getElementById('skyTooltip'),
   starmapServo1Value: document.getElementById('starmapServo1Value'),
   starmapServo2Value: document.getElementById('starmapServo2Value'),
   selectedStarInfo: document.getElementById('selectedStarInfo'),
   calibrateStartButton: document.getElementById('calibrateStartButton'),
   calibrateConfirmButton: document.getElementById('calibrateConfirmButton'),
   gotoButton: document.getElementById('gotoButton'),
+  slewAroundButton: document.getElementById('slewAroundButton'),
   calibrationStepsList: document.getElementById('calibrationStepsList'),
+  searchInput: document.getElementById('searchInput'),
+  searchButton: document.getElementById('searchButton'),
+  searchResults: document.getElementById('searchResults'),
+  starmapButton: document.getElementById('starmapButton'),
+  starmapOverlay: document.getElementById('starmapOverlay'),
+  starmapCloseButton: document.getElementById('starmapCloseButton'),
+  toggleConstellationsButton: document.getElementById('toggleConstellationsButton'),
+  toggleMessierButton: document.getElementById('toggleMessierButton'),
+  settingsButton: document.getElementById('settingsButton'),
+  settingsOverlay: document.getElementById('settingsOverlay'),
+  settingsCloseButton: document.getElementById('settingsCloseButton'),
+  dilationSlider: document.getElementById('dilationSlider'),
+  dilationValue: document.getElementById('dilationValue'),
+  connectionWarningToast: document.getElementById('connectionWarningToast'),
 };
 
 const encoder = new TextEncoder();
@@ -112,7 +224,7 @@ function render() {
   elements.outputButton.setAttribute('aria-pressed', String(state.outputHigh));
   elements.joystickOutputButton.textContent = state.outputHigh ? 'High' : 'Low';
   elements.joystickOutputButton.setAttribute('aria-pressed', String(state.outputHigh));
-  elements.joystickOutputButton.disabled = !state.connected;
+  elements.joystickOutputButton.classList.toggle('toggle-danger', state.outputHigh);
   elements.sweep1Button.textContent = state.sweep1Active ? 'Stop sweep 1' : 'Sweep servo 1';
   elements.sweep1Button.setAttribute('aria-pressed', String(state.sweep1Active));
   elements.sweep2Button.textContent = state.sweep2Active ? 'Stop sweep 2' : 'Sweep servo 2';
@@ -120,18 +232,13 @@ function render() {
   elements.connectionPill.textContent = state.connected ? 'Connected' : 'Disconnected';
   elements.connectionPill.className = `pill ${state.connected ? 'pill-on' : 'pill-off'}`;
   elements.disconnectButton.disabled = !state.connected;
-  elements.servo1Slider.disabled = !state.connected;
-  elements.servo2Slider.disabled = !state.connected;
-  elements.outputButton.disabled = !state.connected;
-  elements.speedSlider.disabled = !state.connected;
-  elements.sweep1Button.disabled = !state.connected;
-  elements.sweep2Button.disabled = !state.connected;
-  elements.joystickButton.disabled = !state.connected;
+  // General controls stay usable without a connection (sendCommand just logs
+  // "blocked" if actually clicked) — including the joystick itself now:
+  // dragging it while disconnected just doesn't send anything. Only
+  // calibration/goto stay gated on being connected, since a goto command
+  // needs a device actually responding to be meaningful.
   elements.joystickServo1Value.textContent = `${state.servo1}°`;
   elements.joystickServo2Value.textContent = `${state.servo2}°`;
-  elements.presetButtons.forEach((button) => {
-    button.disabled = !state.connected;
-  });
   elements.starmapServo1Value.textContent = `${state.servo1}°`;
   elements.starmapServo2Value.textContent = `${state.servo2}°`;
   updateCalibrationUI();
@@ -145,8 +252,19 @@ function clampAngle(value) {
   return clamp(Math.round(value), 0, 180);
 }
 
+let connectionWarningTimer = null;
+
+function showConnectionWarning() {
+  elements.connectionWarningToast.hidden = false;
+  window.clearTimeout(connectionWarningTimer);
+  connectionWarningTimer = window.setTimeout(() => {
+    elements.connectionWarningToast.hidden = true;
+  }, 2500);
+}
+
 async function sendCommandQuiet(command) {
   if (!state.characteristic) {
+    showConnectionWarning();
     return;
   }
   try {
@@ -165,13 +283,23 @@ function resetBallPosition() {
 }
 
 function applyVector(nx, ny) {
-  if (Math.hypot(nx, ny) < JOYSTICK_DEADZONE) {
+  const magnitude = Math.hypot(nx, ny);
+  if (magnitude < JOYSTICK_DEADZONE) {
     joystickDx = 0;
     joystickDy = 0;
     return;
   }
-  joystickDx = clamp(-nx, -1, 1);
-  joystickDy = clamp(ny, -1, 1);
+
+  // Ease the response in from the deadzone edge instead of snapping straight to
+  // full proportional speed — this smooths out the jump right past center and
+  // gives finer low-speed control near it, while still reaching full speed at
+  // full deflection.
+  const normalized = Math.min(1, (magnitude - JOYSTICK_DEADZONE) / (1 - JOYSTICK_DEADZONE));
+  const eased = normalized * normalized;
+  const scale = eased / magnitude;
+
+  joystickDx = clamp(-nx * scale, -1, 1);
+  joystickDy = clamp(ny * scale, -1, 1);
 }
 
 function applyServoTargets(nextServo1, nextServo2) {
@@ -196,6 +324,9 @@ function applyServoTargets(nextServo1, nextServo2) {
   }
 
   render();
+  if (state.starmapOpen) {
+    renderSky();
+  }
 }
 
 function joystickTick() {
@@ -453,7 +584,14 @@ async function toggleGyro2() {
   enableGyro2();
 }
 
+function isDesktopViewport() {
+  return window.matchMedia('(min-width: 760px)').matches;
+}
+
 function openJoystick() {
+  if (!isDesktopViewport() && state.starmapOpen) {
+    closeStarmap();
+  }
   elements.joystickOverlay.classList.add('open');
   elements.joystickOverlay.setAttribute('aria-hidden', 'false');
   resetBallPosition();
@@ -479,6 +617,7 @@ function closeJoystick() {
 async function sendCommand(command) {
   if (!state.characteristic) {
     log(`blocked (not connected): ${command}`, 'warn');
+    showConnectionWarning();
     return;
   }
 
@@ -585,7 +724,27 @@ function disconnectBluetooth() {
   }
 }
 
-let projectedStars = [];
+let projectedObjects = [];
+let hoverSegments = [];
+let mountMarker = null;
+
+function openStarmap() {
+  if (!isDesktopViewport() && elements.joystickOverlay.classList.contains('open')) {
+    closeJoystick();
+  }
+  state.starmapOpen = true;
+  elements.starmapOverlay.classList.add('open');
+  elements.starmapOverlay.setAttribute('aria-hidden', 'false');
+  renderSky();
+}
+
+function closeStarmap() {
+  state.starmapOpen = false;
+  elements.starmapOverlay.classList.remove('open');
+  elements.starmapOverlay.setAttribute('aria-hidden', 'true');
+  hideTooltip();
+  hideSearchResults();
+}
 
 function persistLocation() {
   if (state.location) {
@@ -718,7 +877,9 @@ function renderSky() {
     ctx.fillText(label, x, y);
   });
 
-  projectedStars = [];
+  projectedObjects = [];
+  hoverSegments = [];
+  mountMarker = null;
 
   if (!state.location) {
     ctx.fillText('Set a location to show the sky', cx, cy);
@@ -726,19 +887,77 @@ function renderSky() {
   }
 
   const now = new Date();
+  const project = makeHorizonProjector(now, state.location.latitude, state.location.longitude);
+  const toScreen = (altitude, azimuth) => {
+    const r = ((90 - altitude) / 90) * radius;
+    const azRad = azimuth * DEG2RAD;
+    return { x: cx + r * Math.sin(azRad), y: cy - r * Math.cos(azRad) };
+  };
+
   const calibratedNames = new Set(state.calibration.points.map((point) => point.starName));
+  const highlightConId = state.selectedObject?.kind === 'star'
+    ? state.selectedObject.con
+    : state.selectedObject?.kind === 'constellation'
+      ? state.selectedObject.id
+      : null;
+  const highlightPoints = [];
+
+  if (state.showConstellations) {
+    CONSTELLATIONS.forEach((constellation) => {
+      const isHighlighted = constellation.id === highlightConId;
+      ctx.strokeStyle = isHighlighted ? 'rgba(56, 189, 248, 0.85)' : 'rgba(148, 163, 184, 0.22)';
+      ctx.lineWidth = (isHighlighted ? 2 : 1) * ratio;
+
+      constellation.lines.forEach((segment) => {
+        for (let i = 0; i < segment.length - 1; i += 1) {
+          const a = project(segment[i][0], segment[i][1]);
+          const b = project(segment[i + 1][0], segment[i + 1][1]);
+          if (a.altitude < -2 || b.altitude < -2) {
+            continue;
+          }
+          const pa = toScreen(a.altitude, a.azimuth);
+          const pb = toScreen(b.altitude, b.azimuth);
+          ctx.beginPath();
+          ctx.moveTo(pa.x, pa.y);
+          ctx.lineTo(pb.x, pb.y);
+          ctx.stroke();
+          if (isHighlighted) {
+            highlightPoints.push(pa, pb);
+          }
+          hoverSegments.push({
+            id: constellation.id,
+            name: constellation.name,
+            ax: pa.x,
+            ay: pa.y,
+            bx: pb.x,
+            by: pb.y,
+          });
+        }
+      });
+    });
+  }
+
+  if (highlightPoints.length) {
+    const cxh = highlightPoints.reduce((sum, p) => sum + p.x, 0) / highlightPoints.length;
+    const cyh = highlightPoints.reduce((sum, p) => sum + p.y, 0) / highlightPoints.length;
+    const rh = Math.max(...highlightPoints.map((p) => Math.hypot(p.x - cxh, p.y - cyh))) + 14 * ratio;
+    ctx.beginPath();
+    ctx.arc(cxh, cyh, rh, 0, Math.PI * 2);
+    ctx.setLineDash([6 * ratio, 5 * ratio]);
+    ctx.strokeStyle = 'rgba(56, 189, 248, 0.6)';
+    ctx.lineWidth = 1.5 * ratio;
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
 
   STARS.forEach((star) => {
-    const { altitude, azimuth } = starAltAz(star, now, state.location.latitude, state.location.longitude);
+    const { altitude, azimuth } = project(star.ra, star.dec);
     if (altitude < -2) {
       return;
     }
 
-    const r = ((90 - altitude) / 90) * radius;
-    const azRad = azimuth * DEG2RAD;
-    const x = cx + r * Math.sin(azRad);
-    const y = cy - r * Math.cos(azRad);
-    projectedStars.push({ star, altitude, azimuth, x, y });
+    const { x, y } = toScreen(altitude, azimuth);
+    projectedObjects.push({ kind: 'star', ref: star, altitude, azimuth, x, y });
 
     const starRadius = Math.max(1.5, 4.5 - star.mag * 0.6) * ratio;
     ctx.beginPath();
@@ -754,7 +973,7 @@ function renderSky() {
       ctx.stroke();
     }
 
-    if (state.selectedStar && state.selectedStar.name === star.name) {
+    if (state.selectedObject?.kind === 'star' && state.selectedObject.name === star.name) {
       ctx.beginPath();
       ctx.arc(x, y, starRadius + 7 * ratio, 0, Math.PI * 2);
       ctx.strokeStyle = 'rgba(56, 189, 248, 0.9)';
@@ -762,6 +981,57 @@ function renderSky() {
       ctx.stroke();
     }
   });
+
+  if (state.showMessier) {
+    MESSIER.forEach((entry) => {
+      const { altitude, azimuth } = project(entry.ra, entry.dec);
+      if (altitude < -2) {
+        return;
+      }
+
+      const { x, y } = toScreen(altitude, azimuth);
+      projectedObjects.push({ kind: 'messier', ref: entry, altitude, azimuth, x, y });
+
+      const half = Math.max(2, 4 - entry.mag * 0.3) * ratio;
+      ctx.strokeStyle = altitude < 0 ? 'rgba(196, 181, 253, 0.3)' : 'rgba(196, 181, 253, 0.85)';
+      ctx.lineWidth = ratio;
+      ctx.strokeRect(x - half, y - half, half * 2, half * 2);
+
+      if (state.selectedObject?.kind === 'messier' && state.selectedObject.id === entry.id) {
+        ctx.beginPath();
+        ctx.arc(x, y, half + 7 * ratio, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(56, 189, 248, 0.9)';
+        ctx.lineWidth = 2 * ratio;
+        ctx.stroke();
+      }
+    });
+  }
+
+  if (state.calibration.matrix) {
+    const localVec = servoToLocalUnit(state.servo1, state.servo2);
+    const trueVec = localToTrue(state.calibration.matrix, localVec);
+    const { altitude, azimuth } = unitToAltAz(trueVec);
+    if (altitude >= -2) {
+      const { x, y } = toScreen(altitude, azimuth);
+      mountMarker = { x, y, altitude, azimuth };
+
+      ctx.strokeStyle = '#fbbf24';
+      ctx.lineWidth = 2 * ratio;
+      ctx.beginPath();
+      ctx.arc(x, y, 9 * ratio, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x - 14 * ratio, y);
+      ctx.lineTo(x - 4 * ratio, y);
+      ctx.moveTo(x + 4 * ratio, y);
+      ctx.lineTo(x + 14 * ratio, y);
+      ctx.moveTo(x, y - 14 * ratio);
+      ctx.lineTo(x, y - 4 * ratio);
+      ctx.moveTo(x, y + 4 * ratio);
+      ctx.lineTo(x, y + 14 * ratio);
+      ctx.stroke();
+    }
+  }
 }
 
 function preslewToward(star, altitude, azimuth) {
@@ -782,21 +1052,39 @@ function preslewToward(star, altitude, azimuth) {
   );
 }
 
-function selectStar(star, altitude, azimuth) {
-  state.selectedStar = star;
-  state.selectedStarAltAz = { altitude, azimuth };
-  elements.selectedStarInfo.textContent = `${star.name} — alt ${altitude.toFixed(1)}°, az ${azimuth.toFixed(1)}°`;
+function selectObject(kind, ref, altitude, azimuth) {
+  state.selectedObject = { kind, ...ref };
 
-  if (state.calibrating && state.connected && state.calibration.points.length > 0) {
-    preslewToward(star, altitude, azimuth);
+  if (kind === 'star') {
+    elements.selectedStarInfo.textContent = `${ref.name} (${CONSTELLATIONS_BY_ID.get(ref.con)?.name ?? ref.con}) — alt ${altitude.toFixed(1)}°, az ${azimuth.toFixed(1)}°`;
+  } else if (kind === 'constellation') {
+    elements.selectedStarInfo.textContent = `${ref.name} (constellation center) — alt ${altitude.toFixed(1)}°, az ${azimuth.toFixed(1)}°`;
+  } else {
+    elements.selectedStarInfo.textContent = `${objectLabel({ kind, ...ref })} — ${ref.type}, mag ${ref.mag} — alt ${altitude.toFixed(1)}°, az ${azimuth.toFixed(1)}°`;
+  }
+
+  if (kind === 'star' && state.calibrating && state.connected && state.calibration.points.length > 0) {
+    preslewToward(ref, altitude, azimuth);
   }
 
   updateCalibrationUI();
   renderSky();
 }
 
+function selectConstellation(constellation) {
+  if (!state.location) {
+    log('set a location before selecting a constellation', 'warn');
+    return;
+  }
+
+  const { ra, dec } = constellationCentroid(constellation);
+  const now = new Date();
+  const { altitude, azimuth } = starAltAz({ ra, dec }, now, state.location.latitude, state.location.longitude);
+  selectObject('constellation', { id: constellation.id, name: constellation.name, ra, dec }, altitude, azimuth);
+}
+
 function handleSkyCanvasClick(event) {
-  if (!projectedStars.length) {
+  if (!projectedObjects.length && !hoverSegments.length) {
     return;
   }
 
@@ -808,7 +1096,7 @@ function handleSkyCanvasClick(event) {
 
   let closest = null;
   let closestDist = Infinity;
-  projectedStars.forEach((entry) => {
+  projectedObjects.forEach((entry) => {
     const dist = Math.hypot(entry.x - clickX, entry.y - clickY);
     if (dist < closestDist) {
       closestDist = dist;
@@ -818,8 +1106,96 @@ function handleSkyCanvasClick(event) {
 
   const threshold = 16 * ratio;
   if (closest && closestDist <= threshold) {
-    selectStar(closest.star, closest.altitude, closest.azimuth);
+    selectObject(closest.kind, closest.ref, closest.altitude, closest.azimuth);
+    return;
   }
+
+  let closestLine = null;
+  let closestLineDist = Infinity;
+  hoverSegments.forEach((segment) => {
+    const dist = distanceToSegment(clickX, clickY, segment.ax, segment.ay, segment.bx, segment.by);
+    if (dist < closestLineDist) {
+      closestLineDist = dist;
+      closestLine = segment;
+    }
+  });
+
+  if (closestLine && closestLineDist <= 8 * ratio) {
+    const constellation = CONSTELLATIONS_BY_ID.get(closestLine.id);
+    if (constellation) {
+      selectConstellation(constellation);
+    }
+  }
+}
+
+function distanceToSegment(px, py, ax, ay, bx, by) {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const lengthSq = dx * dx + dy * dy;
+  const t = lengthSq === 0 ? 0 : Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lengthSq));
+  const nearX = ax + t * dx;
+  const nearY = ay + t * dy;
+  return Math.hypot(px - nearX, py - nearY);
+}
+
+function hideTooltip() {
+  elements.skyTooltip.hidden = true;
+}
+
+function showTooltip(clientX, clientY, text) {
+  const wrapRect = elements.skyCanvasWrap.getBoundingClientRect();
+  elements.skyTooltip.textContent = text;
+  elements.skyTooltip.style.left = `${clientX - wrapRect.left}px`;
+  elements.skyTooltip.style.top = `${clientY - wrapRect.top}px`;
+  elements.skyTooltip.hidden = false;
+}
+
+function handleSkyCanvasHover(event) {
+  const canvas = elements.skyCanvas;
+  const rect = canvas.getBoundingClientRect();
+  const ratio = window.devicePixelRatio || 1;
+  const hoverX = (event.clientX - rect.left) * ratio;
+  const hoverY = (event.clientY - rect.top) * ratio;
+
+  if (mountMarker) {
+    const mountDist = Math.hypot(mountMarker.x - hoverX, mountMarker.y - hoverY);
+    if (mountDist <= 16 * ratio) {
+      showTooltip(event.clientX, event.clientY, 'Mount (current position)');
+      return;
+    }
+  }
+
+  let closestPoint = null;
+  let closestPointDist = Infinity;
+  projectedObjects.forEach((entry) => {
+    const dist = Math.hypot(entry.x - hoverX, entry.y - hoverY);
+    if (dist < closestPointDist) {
+      closestPointDist = dist;
+      closestPoint = entry;
+    }
+  });
+
+  if (closestPoint && closestPointDist <= 16 * ratio) {
+    showTooltip(event.clientX, event.clientY, objectLabel({ kind: closestPoint.kind, ...closestPoint.ref }));
+    return;
+  }
+
+  let closestLine = null;
+  let closestLineDist = Infinity;
+  hoverSegments.forEach((segment) => {
+    const dist = distanceToSegment(hoverX, hoverY, segment.ax, segment.ay, segment.bx, segment.by);
+    if (dist < closestLineDist) {
+      closestLineDist = dist;
+      closestLine = segment;
+    }
+  });
+
+  if (closestLine && closestLineDist <= 8 * ratio) {
+    showTooltip(event.clientX, event.clientY, closestLine.name);
+    return;
+  }
+
+  hideTooltip();
 }
 
 function renderCalibrationSteps() {
@@ -841,13 +1217,18 @@ function renderCalibrationSteps() {
 }
 
 function updateCalibrationUI() {
+  elements.calibrateStartButton.disabled = !state.connected;
   elements.calibrateConfirmButton.disabled = !(
     state.connected
     && state.calibrating
-    && state.selectedStar
+    && state.selectedObject?.kind === 'star'
     && state.calibration.points.length < 3
   );
-  elements.gotoButton.disabled = !(state.connected && state.calibration.matrix && state.selectedStar);
+  elements.gotoButton.disabled = !(state.connected && state.calibration.matrix && state.selectedObject);
+  elements.slewAroundButton.disabled = !(
+    slewAroundActive
+    || (state.connected && state.calibration.matrix && state.selectedObject?.kind === 'constellation')
+  );
 
   if (state.calibration.matrix) {
     elements.alignmentPill.textContent = `Calibrated (±${state.calibration.maxResidualDeg.toFixed(1)}°)`;
@@ -862,6 +1243,9 @@ function updateCalibrationUI() {
 }
 
 function startCalibration() {
+  if (!state.connected) {
+    return;
+  }
   state.calibration.points = [];
   state.calibration.matrix = null;
   state.calibration.residualsDeg = null;
@@ -879,27 +1263,27 @@ function confirmCalibrationPoint() {
     log('set a location before calibrating', 'warn');
     return;
   }
-  if (!state.calibrating || !state.selectedStar || state.calibration.points.length >= 3) {
+  if (!state.calibrating || state.selectedObject?.kind !== 'star' || state.calibration.points.length >= 3) {
     return;
   }
 
   const now = new Date();
   const { altitude, azimuth } = starAltAz(
-    state.selectedStar,
+    state.selectedObject,
     now,
     state.location.latitude,
     state.location.longitude,
   );
 
   state.calibration.points.push({
-    starName: state.selectedStar.name,
+    starName: state.selectedObject.name,
     servo1: state.servo1,
     servo2: state.servo2,
     altitude,
     azimuth,
   });
 
-  log(`calibration point ${state.calibration.points.length}/3 captured: ${state.selectedStar.name}`);
+  log(`calibration point ${state.calibration.points.length}/3 captured: ${state.selectedObject.name}`);
   renderCalibrationSteps();
 
   if (state.calibration.points.length === 3) {
@@ -921,13 +1305,13 @@ function confirmCalibrationPoint() {
 }
 
 function performGoto() {
-  if (!state.calibration.matrix || !state.selectedStar || !state.location || !state.connected) {
+  if (!state.calibration.matrix || !state.selectedObject || !state.location || !state.connected) {
     return;
   }
 
   const now = new Date();
   const { altitude, azimuth } = starAltAz(
-    state.selectedStar,
+    state.selectedObject,
     now,
     state.location.latitude,
     state.location.longitude,
@@ -935,14 +1319,186 @@ function performGoto() {
   const trueVec = altAzToUnit(altitude, azimuth);
   const localVec = trueToLocal(state.calibration.matrix, trueVec);
   const { servo1, servo2, inRange } = localUnitToServo(localVec);
+  const label = objectLabel(state.selectedObject);
 
   if (!inRange) {
-    log(`${state.selectedStar.name} is outside the mount's reachable range`, 'warn');
+    log(`${label} is outside the mount's reachable range`, 'warn');
     return;
   }
 
   applyServoTargets(servo1, servo2);
-  log(`slewing to ${state.selectedStar.name} (servo1:${servo1}, servo2:${servo2})`);
+  log(`slewing to ${label} (servo1:${servo1}, servo2:${servo2})`);
+}
+
+const SLEW_AROUND_STEP_MS = 1800;
+let slewAroundActive = false;
+let slewAroundCancelled = false;
+
+function sleep(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function stopSlewAround() {
+  slewAroundCancelled = true;
+}
+
+async function performSlewAround() {
+  if (
+    slewAroundActive
+    || !state.calibration.matrix
+    || state.selectedObject?.kind !== 'constellation'
+    || !state.location
+    || !state.connected
+  ) {
+    return;
+  }
+
+  const constellation = CONSTELLATIONS_BY_ID.get(state.selectedObject.id);
+  if (!constellation) {
+    return;
+  }
+
+  const centroid = constellationCentroid(constellation);
+  const centroidUnit = raDecToUnit(centroid.ra, centroid.dec);
+  const dilationDeg = state.slewAroundDilationDeg;
+  const vertices = constellationVertices(constellation).map((vertex) => dilateRaDec(vertex, centroidUnit, dilationDeg));
+
+  slewAroundActive = true;
+  slewAroundCancelled = false;
+  elements.slewAroundButton.textContent = 'Stop tour';
+  log(`touring ${constellation.name} (${vertices.length} points, +${dilationDeg}° border)`);
+
+  for (let i = 0; i < vertices.length; i += 1) {
+    if (slewAroundCancelled) {
+      break;
+    }
+
+    const now = new Date();
+    const { altitude, azimuth } = starAltAz(vertices[i], now, state.location.latitude, state.location.longitude);
+    if (altitude >= -2) {
+      const trueVec = altAzToUnit(altitude, azimuth);
+      const localVec = trueToLocal(state.calibration.matrix, trueVec);
+      const { servo1, servo2, inRange } = localUnitToServo(localVec);
+      if (inRange) {
+        applyServoTargets(servo1, servo2);
+        // eslint-disable-next-line no-await-in-loop
+        await sleep(SLEW_AROUND_STEP_MS);
+        continue;
+      }
+    }
+  }
+
+  slewAroundActive = false;
+  elements.slewAroundButton.textContent = 'Slew around';
+  log(slewAroundCancelled ? `tour of ${constellation.name} stopped` : `tour of ${constellation.name} complete`);
+  updateCalibrationUI();
+}
+
+function toggleSlewAround() {
+  if (slewAroundActive) {
+    stopSlewAround();
+  } else {
+    performSlewAround();
+  }
+}
+
+function openSettings() {
+  elements.settingsOverlay.classList.add('open');
+  elements.settingsOverlay.setAttribute('aria-hidden', 'false');
+}
+
+function closeSettings() {
+  elements.settingsOverlay.classList.remove('open');
+  elements.settingsOverlay.setAttribute('aria-hidden', 'true');
+}
+
+function toggleSettings() {
+  if (elements.settingsOverlay.classList.contains('open')) {
+    closeSettings();
+  } else {
+    openSettings();
+  }
+}
+
+const SEARCH_RESULT_LIMIT = 8;
+
+// Only searches whichever layers are currently toggled on — stars are
+// always shown (no toggle exists for them), constellations/Messier follow
+// their respective layer buttons.
+function searchCatalog(query) {
+  const q = query.trim().toLowerCase();
+  if (!q) {
+    return [];
+  }
+
+  const results = [];
+
+  STARS.forEach((star) => {
+    if (star.name.toLowerCase().includes(q)) {
+      results.push({ kind: 'star', ref: star, label: star.name });
+    }
+  });
+
+  if (state.showConstellations) {
+    CONSTELLATIONS.forEach((constellation) => {
+      if (constellation.name.toLowerCase().includes(q) || constellation.id.toLowerCase().includes(q)) {
+        results.push({ kind: 'constellation', ref: constellation, label: constellation.name });
+      }
+    });
+  }
+
+  if (state.showMessier) {
+    MESSIER.forEach((entry) => {
+      if (entry.id.toLowerCase().includes(q) || (entry.name && entry.name.toLowerCase().includes(q))) {
+        results.push({ kind: 'messier', ref: entry, label: objectLabel({ kind: 'messier', ...entry }) });
+      }
+    });
+  }
+
+  return results.slice(0, SEARCH_RESULT_LIMIT);
+}
+
+function hideSearchResults() {
+  elements.searchResults.hidden = true;
+  elements.searchResults.innerHTML = '';
+}
+
+function handleSearchSelect(result) {
+  elements.searchInput.value = '';
+  hideSearchResults();
+
+  if (result.kind === 'constellation') {
+    selectConstellation(result.ref);
+    return;
+  }
+
+  if (!state.location) {
+    log('set a location before selecting a search result', 'warn');
+    return;
+  }
+
+  const now = new Date();
+  const { altitude, azimuth } = starAltAz(result.ref, now, state.location.latitude, state.location.longitude);
+  selectObject(result.kind, result.ref, altitude, azimuth);
+}
+
+function renderSearchResults() {
+  const results = searchCatalog(elements.searchInput.value);
+  elements.searchResults.innerHTML = '';
+
+  if (!results.length) {
+    elements.searchResults.hidden = true;
+    return;
+  }
+
+  const icons = { star: '★', messier: '◆', constellation: '▦' };
+  results.forEach((result) => {
+    const item = document.createElement('li');
+    item.textContent = `${icons[result.kind]} ${result.label}`;
+    item.addEventListener('click', () => handleSearchSelect(result));
+    elements.searchResults.appendChild(item);
+  });
+  elements.searchResults.hidden = false;
 }
 
 elements.connectButton.addEventListener('click', connectBluetooth);
@@ -995,17 +1551,93 @@ elements.locateButton.addEventListener('click', requestGeolocation);
 elements.latInput.addEventListener('change', handleManualLocationInput);
 elements.lonInput.addEventListener('change', handleManualLocationInput);
 elements.skyCanvas.addEventListener('click', handleSkyCanvasClick);
+elements.skyCanvas.addEventListener('mousemove', handleSkyCanvasHover);
+elements.skyCanvas.addEventListener('mouseleave', hideTooltip);
 elements.calibrateStartButton.addEventListener('click', startCalibration);
 elements.calibrateConfirmButton.addEventListener('click', confirmCalibrationPoint);
 elements.gotoButton.addEventListener('click', performGoto);
-window.addEventListener('resize', renderSky);
+elements.slewAroundButton.addEventListener('click', toggleSlewAround);
+elements.searchInput.addEventListener('input', renderSearchResults);
+elements.searchButton.addEventListener('click', renderSearchResults);
+elements.searchInput.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter') {
+    return;
+  }
+  const [firstResult] = searchCatalog(elements.searchInput.value);
+  if (firstResult) {
+    handleSearchSelect(firstResult);
+  }
+});
+document.addEventListener('click', (event) => {
+  if (
+    !elements.searchResults.hidden
+    && !elements.searchResults.contains(event.target)
+    && event.target !== elements.searchInput
+    && event.target !== elements.searchButton
+  ) {
+    hideSearchResults();
+  }
+});
+elements.starmapButton.addEventListener('click', openStarmap);
+elements.starmapCloseButton.addEventListener('click', closeStarmap);
+elements.toggleConstellationsButton.addEventListener('click', () => {
+  state.showConstellations = !state.showConstellations;
+  elements.toggleConstellationsButton.setAttribute('aria-pressed', String(state.showConstellations));
+  renderSky();
+});
+elements.toggleMessierButton.addEventListener('click', () => {
+  state.showMessier = !state.showMessier;
+  elements.toggleMessierButton.setAttribute('aria-pressed', String(state.showMessier));
+  renderSky();
+});
+window.addEventListener('resize', () => {
+  if (state.starmapOpen) {
+    renderSky();
+  }
+});
+
+elements.dilationSlider.addEventListener('input', (event) => {
+  state.slewAroundDilationDeg = Number(event.target.value);
+  elements.dilationValue.textContent = `${state.slewAroundDilationDeg}°`;
+});
+elements.settingsButton.addEventListener('click', toggleSettings);
+elements.settingsCloseButton.addEventListener('click', closeSettings);
+document.addEventListener('click', (event) => {
+  if (
+    elements.settingsOverlay.classList.contains('open')
+    && !elements.settingsOverlay.contains(event.target)
+    && event.target !== elements.settingsButton
+  ) {
+    closeSettings();
+  }
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape') {
+    return;
+  }
+  if (elements.joystickOverlay.classList.contains('open')) {
+    closeJoystick();
+  }
+  if (elements.starmapOverlay.classList.contains('open')) {
+    closeStarmap();
+  }
+  if (elements.settingsOverlay.classList.contains('open')) {
+    closeSettings();
+  }
+  hideSearchResults();
+  hideTooltip();
+});
 
 loadPersistedLocation();
 loadPersistedCalibration();
 renderCalibrationSteps();
 updateCalibrationUI();
-renderSky();
-window.setInterval(renderSky, 5000);
+window.setInterval(() => {
+  if (state.starmapOpen) {
+    renderSky();
+  }
+}, 5000);
 
 render();
 log('ready. connect a compatible Bluetooth device to start.');
