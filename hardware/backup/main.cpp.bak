@@ -1,0 +1,85 @@
+#include <Arduino.h>
+
+static constexpr uint8_t kIndicatorPin = 8;  // GPIO8 - Built-in LED
+
+static constexpr unsigned long kDefaultBlinkDelayMs = 500;
+static constexpr size_t kInputBufferSize = 64;
+
+unsigned long blinkDelayMs = kDefaultBlinkDelayMs;
+unsigned long lastBlinkAt = 0;
+unsigned long lastStatusAt = 0;
+bool ledState = false;
+char inputBuffer[kInputBufferSize];
+size_t inputLength = 0;
+
+void handleLine(const char *line) {
+  Serial.print("heard: ");
+  Serial.println(line);
+
+  char *endPtr = nullptr;
+  long value = strtol(line, &endPtr, 10);
+  while (*endPtr == ' ' || *endPtr == '\t') {
+    ++endPtr;
+  }
+
+  if (*line != '\0' && *endPtr == '\0' && value > 0) {
+    blinkDelayMs = static_cast<unsigned long>(value);
+    Serial.print("blink delay set to ");
+    Serial.print(blinkDelayMs);
+    Serial.println(" ms");
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  unsigned long startWait = millis();
+  while (!Serial && millis() - startWait < 2000) {
+    delay(10);
+  }
+
+  Serial.println("Ready. Type text to echo it back, or a number to set blink delay in ms.");
+  Serial.flush();
+  
+  // Initialize indicator pin
+  pinMode(kIndicatorPin, OUTPUT);
+  digitalWrite(kIndicatorPin, LOW);
+  delay(100);
+}
+
+void loop() {
+  while (Serial.available() > 0) {
+    char incoming = static_cast<char>(Serial.read());
+
+    if (incoming == '\r') {
+      continue;
+    }
+
+    if (incoming == '\n') {
+      inputBuffer[inputLength] = '\0';
+      handleLine(inputBuffer);
+      inputLength = 0;
+      continue;
+    }
+
+    if (inputLength < kInputBufferSize - 1) {
+      inputBuffer[inputLength++] = incoming;
+    }
+  }
+
+  unsigned long now = millis();
+  if (now - lastBlinkAt >= blinkDelayMs) {
+    lastBlinkAt = now;
+    ledState = !ledState;
+    
+    digitalWrite(kIndicatorPin, ledState ? HIGH : LOW);
+  }
+
+  if (now - lastStatusAt >= 2000) {
+    lastStatusAt = now;
+    Serial.print("alive: blink delay = ");
+    Serial.print(blinkDelayMs);
+    Serial.print(" ms, indicator = ");
+    Serial.println(ledState ? "on" : "off");
+    Serial.flush();
+  }
+}

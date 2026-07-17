@@ -95,6 +95,51 @@
           </article>
         </section>
 
+        <section class="card starmap-card">
+          <div class="card-header">
+            <div>
+              <h2>Star Map &amp; Mount Alignment</h2>
+              <p class="hint">
+                Aim the mount at 3 real stars (using the sliders or joystick above) to calibrate, then pick any
+                star to slew there automatically.
+              </p>
+            </div>
+            <span id="alignmentPill" class="pill pill-off">Not calibrated</span>
+          </div>
+
+          <div class="starmap-location-row">
+            <button id="locateButton" class="secondary">Use my location</button>
+            <label class="starmap-field">Lat
+              <input id="latInput" type="number" step="0.0001" placeholder="51.5074" />
+            </label>
+            <label class="starmap-field">Lon
+              <input id="lonInput" type="number" step="0.0001" placeholder="-0.1278" />
+            </label>
+          </div>
+          <p id="locationStatus" class="hint">Location not set.</p>
+
+          <div class="starmap-body">
+            <canvas id="skyCanvas" class="sky-canvas" width="480" height="480"></canvas>
+
+            <div class="starmap-panel">
+              <div class="starmap-readout">
+                <span>Servo1: <strong id="starmapServo1Value">90°</strong></span>
+                <span>Servo2: <strong id="starmapServo2Value">90°</strong></span>
+              </div>
+
+              <p id="selectedStarInfo" class="hint">Tap a star on the map to select it.</p>
+
+              <div class="card-footer-row">
+                <button id="calibrateStartButton" class="secondary">Start calibration</button>
+                <button id="calibrateConfirmButton" class="toggle" disabled>Confirm point</button>
+                <button id="gotoButton" class="primary" disabled>Slew here</button>
+              </div>
+
+              <ol id="calibrationStepsList" class="calibration-steps"></ol>
+            </div>
+          </div>
+        </section>
+
         <section class="card log-card">
           <div class="card-header">
             <h2>Command Log</h2>

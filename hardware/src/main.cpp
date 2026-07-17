@@ -111,6 +111,24 @@ void handleCommand(const String &rawCommand) {
     return;
   }
 
+  if (key == "servos") {
+    int commaIndex = valuePart.indexOf(',');
+    if (commaIndex <= 0 || commaIndex >= valuePart.length() - 1) {
+      Serial.println("invalid servos format");
+      return;
+    }
+
+    long v1 = valuePart.substring(0, commaIndex).toInt();
+    long v2 = valuePart.substring(commaIndex + 1).toInt();
+    servo1Target = constrain(static_cast<int>(v1), 0, 180);
+    servo2Target = constrain(static_cast<int>(v2), 0, 180);
+    Serial.print("servos target set to ");
+    Serial.print(servo1Target);
+    Serial.print(",");
+    Serial.println(servo2Target);
+    return;
+  }
+
   if (key == "speed") {
     setSpeedMs(static_cast<int>(value));
     return;
@@ -225,7 +243,7 @@ void setup() {
 
   Serial.println("BLE servo controller ready");
   Serial.println("Pins: servo1=GPIO0, servo2=GPIO1, out=GPIO2");
-  Serial.println("Commands: servo1:<0-180>, servo2:<0-180>, speed:<0-100>, sweep1:<0|1>, sweep2:<0|1>, out:<0|1>");
+  Serial.println("Commands: servo1:<0-180>, servo2:<0-180>, servos:<0-180>,<0-180>, speed:<0-100>, sweep1:<0|1>, sweep2:<0|1>, out:<0|1>");
 }
 
 void loop() {

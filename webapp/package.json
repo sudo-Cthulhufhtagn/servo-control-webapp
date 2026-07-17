@@ -10,5 +10,8 @@
   },
   "devDependencies": {
     "vite": "^8.1.4"
+  },
+  "dependencies": {
+    "astronomy-engine": "^2.1.19"
   }
 }

@@ -1,7 +1,13 @@
 import './style.css';
+import { STARS } from './stars.js';
+import { starAltAz, altAzToUnit } from './sky-math.js';
+import { localUnitToServo, solveAlignment, trueToLocal } from './mount-align.js';
 
 const SERVICE_UUID = '6f94b030-1c3a-4c44-8f19-1f8b31d71f40';
 const COMMAND_UUID = '6f94b031-1c3a-4c44-8f19-1f8b31d71f40';
+const LOCATION_STORAGE_KEY = 'starmap:location';
+const CALIBRATION_STORAGE_KEY = 'starmap:calibration';
+const DEG2RAD = Math.PI / 180;
 
 const state = {
   connected: false,
@@ -13,6 +19,16 @@ const state = {
   sweep1Active: false,
   sweep2Active: false,
   speedMs: 0,
+  location: null,
+  selectedStar: null,
+  selectedStarAltAz: null,
+  calibrating: false,
+  calibration: {
+    points: [],
+    matrix: null,
+    residualsDeg: null,
+    maxResidualDeg: null,
+  },
 };
 
 const elements = {
@@ -41,6 +57,19 @@ const elements = {
   joystickOutputButton: document.getElementById('joystickOutputButton'),
   joystickServo1Value: document.getElementById('joystickServo1Value'),
   joystickServo2Value: document.getElementById('joystickServo2Value'),
+  alignmentPill: document.getElementById('alignmentPill'),
+  locateButton: document.getElementById('locateButton'),
+  latInput: document.getElementById('latInput'),
+  lonInput: document.getElementById('lonInput'),
+  locationStatus: document.getElementById('locationStatus'),
+  skyCanvas: document.getElementById('skyCanvas'),
+  starmapServo1Value: document.getElementById('starmapServo1Value'),
+  starmapServo2Value: document.getElementById('starmapServo2Value'),
+  selectedStarInfo: document.getElementById('selectedStarInfo'),
+  calibrateStartButton: document.getElementById('calibrateStartButton'),
+  calibrateConfirmButton: document.getElementById('calibrateConfirmButton'),
+  gotoButton: document.getElementById('gotoButton'),
+  calibrationStepsList: document.getElementById('calibrationStepsList'),
 };
 
 const encoder = new TextEncoder();
@@ -103,6 +132,9 @@ function render() {
   elements.presetButtons.forEach((button) => {
     button.disabled = !state.connected;
   });
+  elements.starmapServo1Value.textContent = `${state.servo1}°`;
+  elements.starmapServo2Value.textContent = `${state.servo2}°`;
+  updateCalibrationUI();
 }
 
 function clamp(value, min, max) {
@@ -142,27 +174,37 @@ function applyVector(nx, ny) {
   joystickDy = clamp(ny, -1, 1);
 }
 
+function applyServoTargets(nextServo1, nextServo2) {
+  const changed1 = nextServo1 !== state.servo1;
+  const changed2 = nextServo2 !== state.servo2;
+
+  if (!changed1 && !changed2) {
+    return;
+  }
+
+  state.servo1 = nextServo1;
+  state.servo2 = nextServo2;
+  elements.servo1Slider.value = String(nextServo1);
+  elements.servo2Slider.value = String(nextServo2);
+
+  if (changed1 && changed2) {
+    sendCommandQuiet(`servos:${nextServo1},${nextServo2}`);
+  } else if (changed1) {
+    sendCommandQuiet(`servo1:${nextServo1}`);
+  } else {
+    sendCommandQuiet(`servo2:${nextServo2}`);
+  }
+
+  render();
+}
+
 function joystickTick() {
   if (gyro2Active) {
-    let changed = false;
-
-    if (targetServo1 !== null && targetServo1 !== state.servo1) {
-      state.servo1 = targetServo1;
-      elements.servo1Slider.value = String(targetServo1);
-      sendCommandQuiet(`servo1:${targetServo1}`);
-      changed = true;
+    if (targetServo1 === null || targetServo2 === null) {
+      return;
     }
 
-    if (targetServo2 !== null && targetServo2 !== state.servo2) {
-      state.servo2 = targetServo2;
-      elements.servo2Slider.value = String(targetServo2);
-      sendCommandQuiet(`servo2:${targetServo2}`);
-      changed = true;
-    }
-
-    if (changed) {
-      render();
-    }
+    applyServoTargets(targetServo1, targetServo2);
     return;
   }
 
@@ -172,25 +214,7 @@ function joystickTick() {
 
   const nextServo1 = clampAngle(state.servo1 + joystickDx * JOYSTICK_MAX_DEG_PER_TICK);
   const nextServo2 = clampAngle(state.servo2 + joystickDy * JOYSTICK_MAX_DEG_PER_TICK);
-  let changed = false;
-
-  if (nextServo1 !== state.servo1) {
-    state.servo1 = nextServo1;
-    elements.servo1Slider.value = String(nextServo1);
-    sendCommandQuiet(`servo1:${nextServo1}`);
-    changed = true;
-  }
-
-  if (nextServo2 !== state.servo2) {
-    state.servo2 = nextServo2;
-    elements.servo2Slider.value = String(nextServo2);
-    sendCommandQuiet(`servo2:${nextServo2}`);
-    changed = true;
-  }
-
-  if (changed) {
-    render();
-  }
+  applyServoTargets(nextServo1, nextServo2);
 }
 
 function startJoystickLoop() {
@@ -534,8 +558,7 @@ async function connectBluetooth() {
     render();
 
     log(`connected to ${device.name || 'device'}`);
-    await sendCommand(`servo1:${state.servo1}`);
-    await sendCommand(`servo2:${state.servo2}`);
+    await sendCommand(`servos:${state.servo1},${state.servo2}`);
     await sendCommand(`speed:${state.speedMs}`);
     await sendCommand(`sweep1:${state.sweep1Active ? 1 : 0}`);
     await sendCommand(`sweep2:${state.sweep2Active ? 1 : 0}`);
@@ -560,6 +583,366 @@ function disconnectBluetooth() {
   } else {
     handleDisconnect();
   }
+}
+
+let projectedStars = [];
+
+function persistLocation() {
+  if (state.location) {
+    localStorage.setItem(LOCATION_STORAGE_KEY, JSON.stringify(state.location));
+  }
+}
+
+function loadPersistedLocation() {
+  try {
+    const raw = localStorage.getItem(LOCATION_STORAGE_KEY);
+    if (!raw) {
+      return;
+    }
+    const parsed = JSON.parse(raw);
+    if (Number.isFinite(parsed.latitude) && Number.isFinite(parsed.longitude)) {
+      state.location = parsed;
+      elements.latInput.value = parsed.latitude;
+      elements.lonInput.value = parsed.longitude;
+      elements.locationStatus.textContent = `Location set: ${parsed.latitude.toFixed(4)}, ${parsed.longitude.toFixed(4)}`;
+    }
+  } catch {
+    // ignore corrupt storage
+  }
+}
+
+function persistCalibration() {
+  localStorage.setItem(
+    CALIBRATION_STORAGE_KEY,
+    JSON.stringify({
+      matrix: state.calibration.matrix,
+      residualsDeg: state.calibration.residualsDeg,
+      maxResidualDeg: state.calibration.maxResidualDeg,
+    }),
+  );
+}
+
+function loadPersistedCalibration() {
+  try {
+    const raw = localStorage.getItem(CALIBRATION_STORAGE_KEY);
+    if (!raw) {
+      return;
+    }
+    const parsed = JSON.parse(raw);
+    if (parsed.matrix) {
+      state.calibration.matrix = parsed.matrix;
+      state.calibration.residualsDeg = parsed.residualsDeg;
+      state.calibration.maxResidualDeg = parsed.maxResidualDeg;
+    }
+  } catch {
+    // ignore corrupt storage
+  }
+}
+
+function setLocation(latitude, longitude) {
+  state.location = { latitude, longitude };
+  elements.latInput.value = latitude;
+  elements.lonInput.value = longitude;
+  elements.locationStatus.textContent = `Location set: ${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
+  persistLocation();
+  renderSky();
+}
+
+function requestGeolocation() {
+  if (!navigator.geolocation) {
+    elements.locationStatus.textContent = 'Geolocation is not available in this browser.';
+    return;
+  }
+  elements.locationStatus.textContent = 'Requesting location...';
+  navigator.geolocation.getCurrentPosition(
+    (position) => {
+      setLocation(position.coords.latitude, position.coords.longitude);
+      log('location set from device GPS');
+    },
+    (error) => {
+      elements.locationStatus.textContent = `Location error: ${error.message}`;
+    },
+    { enableHighAccuracy: true, timeout: 10000 },
+  );
+}
+
+function handleManualLocationInput() {
+  const latitude = Number(elements.latInput.value);
+  const longitude = Number(elements.lonInput.value);
+  if (
+    Number.isFinite(latitude)
+    && Number.isFinite(longitude)
+    && Math.abs(latitude) <= 90
+    && Math.abs(longitude) <= 180
+  ) {
+    setLocation(latitude, longitude);
+  }
+}
+
+function resizeCanvasIfNeeded(canvas) {
+  const rect = canvas.getBoundingClientRect();
+  const ratio = window.devicePixelRatio || 1;
+  const width = Math.max(1, Math.round(rect.width * ratio));
+  const height = Math.max(1, Math.round(rect.height * ratio));
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+  return { width, height, ratio };
+}
+
+function renderSky() {
+  const canvas = elements.skyCanvas;
+  const ctx = canvas.getContext('2d');
+  const { width, height, ratio } = resizeCanvasIfNeeded(canvas);
+  const cx = width / 2;
+  const cy = height / 2;
+  const radius = Math.min(width, height) / 2 - 10 * ratio;
+
+  ctx.clearRect(0, 0, width, height);
+
+  ctx.strokeStyle = 'rgba(148, 163, 184, 0.35)';
+  ctx.lineWidth = ratio;
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.fillStyle = 'rgba(148, 163, 184, 0.6)';
+  ctx.font = `${12 * ratio}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  [['N', 0], ['E', 90], ['S', 180], ['W', 270]].forEach(([label, az]) => {
+    const azRad = az * DEG2RAD;
+    const x = cx + (radius + 14 * ratio) * Math.sin(azRad);
+    const y = cy - (radius + 14 * ratio) * Math.cos(azRad);
+    ctx.fillText(label, x, y);
+  });
+
+  projectedStars = [];
+
+  if (!state.location) {
+    ctx.fillText('Set a location to show the sky', cx, cy);
+    return;
+  }
+
+  const now = new Date();
+  const calibratedNames = new Set(state.calibration.points.map((point) => point.starName));
+
+  STARS.forEach((star) => {
+    const { altitude, azimuth } = starAltAz(star, now, state.location.latitude, state.location.longitude);
+    if (altitude < -2) {
+      return;
+    }
+
+    const r = ((90 - altitude) / 90) * radius;
+    const azRad = azimuth * DEG2RAD;
+    const x = cx + r * Math.sin(azRad);
+    const y = cy - r * Math.cos(azRad);
+    projectedStars.push({ star, altitude, azimuth, x, y });
+
+    const starRadius = Math.max(1.5, 4.5 - star.mag * 0.6) * ratio;
+    ctx.beginPath();
+    ctx.arc(x, y, starRadius, 0, Math.PI * 2);
+    ctx.fillStyle = altitude < 0 ? 'rgba(226, 232, 240, 0.25)' : '#e2e8f0';
+    ctx.fill();
+
+    if (calibratedNames.has(star.name)) {
+      ctx.beginPath();
+      ctx.arc(x, y, starRadius + 4 * ratio, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(34, 197, 94, 0.85)';
+      ctx.lineWidth = 1.5 * ratio;
+      ctx.stroke();
+    }
+
+    if (state.selectedStar && state.selectedStar.name === star.name) {
+      ctx.beginPath();
+      ctx.arc(x, y, starRadius + 7 * ratio, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(56, 189, 248, 0.9)';
+      ctx.lineWidth = 2 * ratio;
+      ctx.stroke();
+    }
+  });
+}
+
+function preslewToward(star, altitude, azimuth) {
+  const { matrix } = solveAlignment(state.calibration.points);
+  const trueVec = altAzToUnit(altitude, azimuth);
+  const localVec = trueToLocal(matrix, trueVec);
+  const { servo1, servo2, inRange } = localUnitToServo(localVec);
+
+  if (!inRange) {
+    log(`${star.name} looks outside the mount's range from a partial estimate — aim manually`, 'warn');
+    return;
+  }
+
+  applyServoTargets(servo1, servo2);
+  log(
+    `pre-slewing toward ${star.name} (estimate from ${state.calibration.points.length} point`
+    + `${state.calibration.points.length === 1 ? '' : 's'}) — fine-tune, then confirm`,
+  );
+}
+
+function selectStar(star, altitude, azimuth) {
+  state.selectedStar = star;
+  state.selectedStarAltAz = { altitude, azimuth };
+  elements.selectedStarInfo.textContent = `${star.name} — alt ${altitude.toFixed(1)}°, az ${azimuth.toFixed(1)}°`;
+
+  if (state.calibrating && state.connected && state.calibration.points.length > 0) {
+    preslewToward(star, altitude, azimuth);
+  }
+
+  updateCalibrationUI();
+  renderSky();
+}
+
+function handleSkyCanvasClick(event) {
+  if (!projectedStars.length) {
+    return;
+  }
+
+  const canvas = elements.skyCanvas;
+  const rect = canvas.getBoundingClientRect();
+  const ratio = window.devicePixelRatio || 1;
+  const clickX = (event.clientX - rect.left) * ratio;
+  const clickY = (event.clientY - rect.top) * ratio;
+
+  let closest = null;
+  let closestDist = Infinity;
+  projectedStars.forEach((entry) => {
+    const dist = Math.hypot(entry.x - clickX, entry.y - clickY);
+    if (dist < closestDist) {
+      closestDist = dist;
+      closest = entry;
+    }
+  });
+
+  const threshold = 16 * ratio;
+  if (closest && closestDist <= threshold) {
+    selectStar(closest.star, closest.altitude, closest.azimuth);
+  }
+}
+
+function renderCalibrationSteps() {
+  elements.calibrationStepsList.innerHTML = '';
+  for (let i = 0; i < 3; i += 1) {
+    const point = state.calibration.points[i];
+    const item = document.createElement('li');
+    if (point) {
+      const residual = state.calibration.residualsDeg ? state.calibration.residualsDeg[i] : null;
+      item.textContent = residual !== null && residual !== undefined
+        ? `Point ${i + 1}: ${point.starName} (residual ${residual.toFixed(2)}°)`
+        : `Point ${i + 1}: ${point.starName} — captured`;
+      item.dataset.done = 'true';
+    } else {
+      item.textContent = `Point ${i + 1}: not captured`;
+    }
+    elements.calibrationStepsList.appendChild(item);
+  }
+}
+
+function updateCalibrationUI() {
+  elements.calibrateConfirmButton.disabled = !(
+    state.connected
+    && state.calibrating
+    && state.selectedStar
+    && state.calibration.points.length < 3
+  );
+  elements.gotoButton.disabled = !(state.connected && state.calibration.matrix && state.selectedStar);
+
+  if (state.calibration.matrix) {
+    elements.alignmentPill.textContent = `Calibrated (±${state.calibration.maxResidualDeg.toFixed(1)}°)`;
+    elements.alignmentPill.className = 'pill pill-on';
+  } else if (state.calibrating) {
+    elements.alignmentPill.textContent = `Calibrating (${state.calibration.points.length}/3)`;
+    elements.alignmentPill.className = 'pill pill-soft';
+  } else {
+    elements.alignmentPill.textContent = 'Not calibrated';
+    elements.alignmentPill.className = 'pill pill-off';
+  }
+}
+
+function startCalibration() {
+  state.calibration.points = [];
+  state.calibration.matrix = null;
+  state.calibration.residualsDeg = null;
+  state.calibration.maxResidualDeg = null;
+  state.calibrating = true;
+  elements.selectedStarInfo.textContent = 'Calibration started — select a star, aim the mount at it, then confirm.';
+  renderCalibrationSteps();
+  updateCalibrationUI();
+  renderSky();
+  log('calibration started — pick 3 well-separated stars');
+}
+
+function confirmCalibrationPoint() {
+  if (!state.location) {
+    log('set a location before calibrating', 'warn');
+    return;
+  }
+  if (!state.calibrating || !state.selectedStar || state.calibration.points.length >= 3) {
+    return;
+  }
+
+  const now = new Date();
+  const { altitude, azimuth } = starAltAz(
+    state.selectedStar,
+    now,
+    state.location.latitude,
+    state.location.longitude,
+  );
+
+  state.calibration.points.push({
+    starName: state.selectedStar.name,
+    servo1: state.servo1,
+    servo2: state.servo2,
+    altitude,
+    azimuth,
+  });
+
+  log(`calibration point ${state.calibration.points.length}/3 captured: ${state.selectedStar.name}`);
+  renderCalibrationSteps();
+
+  if (state.calibration.points.length === 3) {
+    const { matrix, residualsDeg, maxResidualDeg } = solveAlignment(state.calibration.points);
+    state.calibration.matrix = matrix;
+    state.calibration.residualsDeg = residualsDeg;
+    state.calibration.maxResidualDeg = maxResidualDeg;
+    state.calibrating = false;
+    persistCalibration();
+    log(
+      `calibration solved — max residual ${maxResidualDeg.toFixed(2)}°`,
+      maxResidualDeg > 3 ? 'warn' : 'normal',
+    );
+    renderCalibrationSteps();
+  }
+
+  updateCalibrationUI();
+  renderSky();
+}
+
+function performGoto() {
+  if (!state.calibration.matrix || !state.selectedStar || !state.location || !state.connected) {
+    return;
+  }
+
+  const now = new Date();
+  const { altitude, azimuth } = starAltAz(
+    state.selectedStar,
+    now,
+    state.location.latitude,
+    state.location.longitude,
+  );
+  const trueVec = altAzToUnit(altitude, azimuth);
+  const localVec = trueToLocal(state.calibration.matrix, trueVec);
+  const { servo1, servo2, inRange } = localUnitToServo(localVec);
+
+  if (!inRange) {
+    log(`${state.selectedStar.name} is outside the mount's reachable range`, 'warn');
+    return;
+  }
+
+  applyServoTargets(servo1, servo2);
+  log(`slewing to ${state.selectedStar.name} (servo1:${servo1}, servo2:${servo2})`);
 }
 
 elements.connectButton.addEventListener('click', connectBluetooth);
@@ -607,6 +990,22 @@ window.addEventListener('beforeunload', () => {
     state.device.gatt.disconnect();
   }
 });
+
+elements.locateButton.addEventListener('click', requestGeolocation);
+elements.latInput.addEventListener('change', handleManualLocationInput);
+elements.lonInput.addEventListener('change', handleManualLocationInput);
+elements.skyCanvas.addEventListener('click', handleSkyCanvasClick);
+elements.calibrateStartButton.addEventListener('click', startCalibration);
+elements.calibrateConfirmButton.addEventListener('click', confirmCalibrationPoint);
+elements.gotoButton.addEventListener('click', performGoto);
+window.addEventListener('resize', renderSky);
+
+loadPersistedLocation();
+loadPersistedCalibration();
+renderCalibrationSteps();
+updateCalibrationUI();
+renderSky();
+window.setInterval(renderSky, 5000);
 
 render();
 log('ready. connect a compatible Bluetooth device to start.');

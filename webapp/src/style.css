@@ -290,6 +290,93 @@ button:disabled {
   color: #fecaca;
 }
 
+.starmap-card {
+  padding: 22px;
+}
+
+.starmap-location-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.starmap-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.starmap-field input {
+  width: 110px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--card-border);
+  background: rgba(15, 23, 42, 0.45);
+  color: var(--text);
+}
+
+.starmap-body {
+  display: grid;
+  grid-template-columns: minmax(0, 480px) minmax(240px, 1fr);
+  gap: 20px;
+  margin-top: 16px;
+  align-items: start;
+}
+
+.sky-canvas {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 45%, rgba(56, 189, 248, 0.08), rgba(2, 6, 23, 0.85));
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  touch-action: none;
+  cursor: pointer;
+}
+
+.starmap-panel {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.starmap-readout {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.starmap-readout strong {
+  color: var(--accent);
+}
+
+.calibration-steps {
+  list-style: none;
+  padding: 0;
+  margin: 4px 0 0;
+  display: grid;
+  gap: 8px;
+}
+
+.calibration-steps li {
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.45);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.calibration-steps li[data-done='true'] {
+  color: var(--text);
+  border-color: rgba(34, 197, 94, 0.22);
+}
+
 .joystick-overlay {
   position: fixed;
   inset: 0;
@@ -409,5 +496,14 @@ button:disabled {
   .trackpad-ball {
     width: 48px;
     height: 48px;
+  }
+
+  .starmap-body {
+    grid-template-columns: 1fr;
+  }
+
+  .sky-canvas {
+    max-width: 360px;
+    margin: 0 auto;
   }
 }
